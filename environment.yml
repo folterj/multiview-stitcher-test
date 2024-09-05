@@ -12,6 +12,7 @@ dependencies:
  - scikit-learn
  - dask
  - tifffile>=2023.9.26
+ - opencv-python
  - matplotlib
  - tqdm
  - pip
