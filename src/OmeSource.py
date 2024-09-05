@@ -312,7 +312,6 @@ class OmeSource:
         # expects x0, x1, y0, y1, ...
         x0, x1 = slicing.get('x0', 0), slicing.get('x1', -1)
         y0, y1 = slicing.get('y0', 0), slicing.get('y1', -1)
-        c, t, z = slicing.get('c'), slicing.get('t'), slicing.get('z')
         # allow custom pixel size
         if pixel_size:
             level, factor, _ = get_best_level_factor(self, pixel_size)
@@ -324,11 +323,9 @@ class OmeSource:
         if x1 < 0 or y1 < 0:
             x1, y1 = size0
         if np.mean(factor) != 1:
-            ox0, oy0 = np.round(np.divide([x0, y0], factor)).astype(int)
-            ox1, oy1 = np.round(np.divide([x1, y1], factor)).astype(int)
-        else:
-            ox0, ox1, oy0, oy1 = x0, x1, y0, y1
-        image0 = self._asarray_level(level=level, x0=ox0, x1=ox1, y0=oy0, y1=oy1, c=c, z=z, t=t)
+            slicing['x0'], slicing['y0'] = np.round(np.divide([x0, y0], factor)).astype(int)
+            slicing['x1'], slicing['y1'] = np.round(np.divide([x1, y1], factor)).astype(int)
+        image0 = self._asarray_level(level=level, **slicing)
         if np.mean(factor) != 1:
             size1 = x1 - x0, y1 - y0
             image = image_resize(image0, size1, dimension_order=self.get_dimension_order())
@@ -338,8 +335,8 @@ class OmeSource:
 
     def asarray_um(self, **slicing):
         pixel_size = self.get_pixel_size_micrometer()[:2]
-        slicing['x0'], slicing['x1'] = np.divide([slicing.get('x0'), slicing.get('x1')], pixel_size[0])
-        slicing['y0'], slicing['y1'] = np.divide([slicing.get('y0'), slicing.get('y1')], pixel_size[1])
+        slicing['x0'], slicing['y0'] = np.divide([slicing.get('x0'), slicing.get('y0')], pixel_size)
+        slicing['x1'], slicing['y1'] = np.divide([slicing.get('x1'), slicing.get('y1')], pixel_size)
         return self.asarray(**slicing)
 
     def asdask(self, chunk_size: tuple) -> da.Array:
@@ -396,6 +393,9 @@ class OmeSource:
                 x1, y1 = min((chunkx + 1) * chunk_size[0], w), min((chunky + 1) * chunk_size[1], h)
                 indices = 0, 0, 0, y0, x0
                 yield indices, self.asarray(x0=x0, x1=x1, y0=y0, y1=y1)
+
+    def get_metadata(self) -> dict:
+        return self.metadata
 
     #def create_xml_metadata(self, output_filename: str, combine_rgb: bool = True, pyramid_sizes_add: list = None) -> str:
     #    return create_ome_metadata(self, output_filename, combine_rgb=combine_rgb, pyramid_sizes_add=pyramid_sizes_add)

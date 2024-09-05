@@ -1,9 +1,9 @@
 # https://pypi.org/project/tifffile/
-import os.path
 
 import dask.array as da
 from enum import Enum
 import numpy as np
+import os
 from tifffile import TiffFile, TiffPage, PHOTOMETRIC
 
 from OmeSource import OmeSource
@@ -143,7 +143,9 @@ class TiffSource(OmeSource):
             pixel_size_unit = self.default_physical_unit
         if 'scales' in self.metadata:
             for scale in self.metadata['scales'].split(','):
-                pixel_size.append((float(scale), pixel_size_unit))
+                scale = scale.strip()
+                if scale != '':
+                    pixel_size.append((float(scale), pixel_size_unit))
         if len(pixel_size) == 0 and self.metadata is not None and 'spacing' in self.metadata:
             pixel_size_z = (self.metadata['spacing'], pixel_size_unit)
         # from description
