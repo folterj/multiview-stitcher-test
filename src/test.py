@@ -1,7 +1,9 @@
+from dask.diagnostics import ProgressBar
 import numpy as np
 from multiview_stitcher import msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher import vis_utils
+from multiview_stitcher import registration
 
 
 if __name__ == '__main__':
@@ -33,4 +35,14 @@ if __name__ == '__main__':
 
     # plot the tile configuration
     fig, ax = vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False)
-    fig.show()
+
+    with ProgressBar():
+        params = registration.register(
+            msims,
+            reg_channel="DAPI",  # channel to use for registration
+            transform_key="stage_metadata",
+            new_transform_key="translation_registered",
+        )
+
+    # plot the tile configuration after registration
+    vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False)
