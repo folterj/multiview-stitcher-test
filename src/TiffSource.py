@@ -120,7 +120,7 @@ class TiffSource(OmeSource):
             self.pixel_nbits.append(bitspersample)
 
         self.fh = tiff.filehandle
-        self.dimension_order = self.dimension_order.lower().replace('s', 'c')
+        self.dimension_order = self.dimension_order.lower().replace('s', 'c').replace('r', '')
 
         self.is_rgb = (photometric in (PHOTOMETRIC.RGB, PHOTOMETRIC.PALETTE) and nchannels in (3, 4))
 
@@ -200,11 +200,22 @@ class TiffSource(OmeSource):
 
     def _load_as_dask(self):
         if len(self.arrays) == 0:
-            for level in range(len(self.sizes)):
-                data = da.from_zarr(self.tiff.aszarr(level=level))
-                if data.chunksize == data.shape:
-                    data = data.rechunk()
-                self.arrays.append(data)
+            if self.tiff.is_mmstack:
+                for page in self.pages:
+                    if isinstance(page, list):
+                        page0 = page[0]
+                    else:
+                        page0 = page
+                    data = da.from_zarr(page0.aszarr())
+                    if data.chunksize == data.shape:
+                        data = data.rechunk()
+                    self.arrays.append(data)
+            else:
+                for level in range(len(self.sizes)):
+                    data = da.from_zarr(self.tiff.aszarr(level=level))
+                    if data.chunksize == data.shape:
+                        data = data.rechunk()
+                    self.arrays.append(data)
         return self.arrays
 
     def _asarray_level(self, level: int, **slicing) -> np.ndarray:
