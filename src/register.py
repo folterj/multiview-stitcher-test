@@ -1,13 +1,18 @@
+from concurrent.futures import ThreadPoolExecutor
 from dask.diagnostics import ProgressBar
+import logging
 import matplotlib as mpl
+from distributed import Client, LocalCluster
 from matplotlib import pyplot as plt
 from multiview_stitcher import registration, fusion, msi_utils, vis_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
+from spatial_image import SpatialImage
 from tqdm import tqdm
 
+from src.OmeZarr import OmeZarr
 from src.TiffSource import TiffSource
 from src.util import get_value_units_micrometer
 
@@ -34,9 +39,9 @@ def create_example_tiles():
     return tiles
 
 
-def load_tiles(files):
+def init_tiles(files):
     tiles = []
-    for file in files:
+    for file in tqdm(files):
         source = TiffSource(file)
         translation = convert_xyz_to_dict(get_value_units_micrometer(source.position))
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
@@ -73,23 +78,35 @@ def images_to_msims(tiles):
 
 
 def register(msims, reg_channel=None, reg_channel_index=None):
+    print('Registering...')
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
     with ProgressBar():
+        client = Client(LocalCluster(processes=False, n_workers=1, threads_per_worker=4))
         mappings = registration.register(
             msims,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
-            new_transform_key="translation_registered"
+            new_transform_key="translation_registered",
+            scheduler=None
         )
 
+    print('Fusing...')
     fused_image = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim) for msim in msims],
         transform_key="translation_registered"
     )
     return mappings, fused_image
+
+
+def save_zarr(filename, image, source):
+    #data.to_zarr(filename)
+    if isinstance(image, SpatialImage):
+        source0.output_dimension_order = ''.join(image.dims)
+    zarr = OmeZarr(filename)
+    zarr.write(image.data, source)
 
 
 def convert_xyz_to_dict(xyz):
@@ -118,34 +135,59 @@ if __name__ == '__main__':
     #tiles = create_example_tiles()
     #reg_channel = "DAPI"
 
-    #file_pattern = ('D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/'
-    #                'tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*')
-    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/tiles_1/.*.ome.tif'
+    #file_pattern = ('D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*')
+    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_0_.*.ome.tif'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
 
-    tiles = load_tiles(dir_regex(file_pattern))
+    original_fused_filename = 'D:/slides/EM04768_01_substrate_04/original.ome.zarr'
+    registered_fused_filename = 'D:/slides/EM04768_01_substrate_04/registered.ome.zarr'
 
+    mvsr_logger = logging.getLogger('multiview_stitcher.registration')
+    mvsr_logger.setLevel(logging.INFO)
+    if len(mvsr_logger.handlers) == 0:
+        mvsr_logger.addHandler(logging.StreamHandler())
+
+    print('Initialising tiles...')
+    filenames = dir_regex(file_pattern)
+    source0 = TiffSource(filenames[0])
+    tiles = init_tiles(filenames)
+
+    print('Converting tiles...')
     msims = images_to_msims(tiles)
 
-    # before registration
-    fused_image = fusion.fuse(
+    # before registration:
+    print('Fusing original...')
+    original_fused = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim) for msim in msims],
         transform_key='stage_metadata'
     )
-    show_image(fused_image.data[0, 0, ...])
+    print('Saving fused image...')
+    save_zarr(original_fused_filename, original_fused, source0)
+    #show_image(original_fused.data[0, 0, ...])
 
     # plot the tile configuration
-    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False)
+    print('Plotting tiles...')
+    fig, ax = vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False)
+    for item in ax.texts:
+        item.set_fontsize(4)
+    fig.show()
 
-    mappings, fused_image = register(msims, reg_channel)
+    mappings, registered_fused = register(msims, reg_channel)
 
+    print('Registration mappings (delta position offsets for each tile):')
     for mapping in mappings:
         print(mapping.data)
         print()
 
     # plot the tile configuration after registration
-    vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False)
+    print('Plotting tiles...')
+    fig, ax = vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False)
+    for item in ax.texts:
+        item.set_fontsize(4)
+    fig.show()
 
-    # get fused array as a dask array
-    #show_image(fused_image.data[0, 0, 5, ...])
-    show_image(fused_image.data[0, 0, ...])
+    print('Saving fused image...')
+    save_zarr(registered_fused_filename, registered_fused, source0)
+    #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
+    #show_image(registered_fused.data[0, 0, ...])

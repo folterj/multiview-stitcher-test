@@ -200,22 +200,17 @@ class TiffSource(OmeSource):
 
     def _load_as_dask(self):
         if len(self.arrays) == 0:
-            if self.tiff.is_mmstack:
-                for page in self.pages:
+            for level in range(len(self.sizes)):
+                if self.tiff.is_mmstack:
+                    page = self.pages[level]
                     if isinstance(page, list):
-                        page0 = page[0]
-                    else:
-                        page0 = page
-                    data = da.from_zarr(page0.aszarr())
-                    if data.chunksize == data.shape:
-                        data = data.rechunk()
-                    self.arrays.append(data)
-            else:
-                for level in range(len(self.sizes)):
+                        page = page[0]
+                    data = da.from_zarr(page.aszarr())
+                else:
                     data = da.from_zarr(self.tiff.aszarr(level=level))
-                    if data.chunksize == data.shape:
-                        data = data.rechunk()
-                    self.arrays.append(data)
+                if data.chunksize == data.shape:
+                    data = data.rechunk()
+                self.arrays.append(data)
         return self.arrays
 
     def _asarray_level(self, level: int, **slicing) -> np.ndarray:
