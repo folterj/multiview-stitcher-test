@@ -1,0 +1,22 @@
+name: multiview-stitcher-cont-env
+channels:
+ - conda-forge
+ - defaults
+dependencies:
+ - python=3.10
+ - numpy
+ - scipy
+ - scikit-image
+ - scikit-learn
+ - dask
+ - tifffile>=2023.9.26
+ - zarr
+ - ome-zarr
+ - matplotlib
+ - tqdm
+ - pip
+ - pip:
+   - git+https://github.com/folterj/multiview-stitcher
+   - opencv-python
+   - spatial-image
+   - multiscale-spatial-image
