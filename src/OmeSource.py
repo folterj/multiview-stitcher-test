@@ -3,9 +3,9 @@ import dask.array as da
 import logging
 import numpy as np
 
-from image.color_conversion import *
-from image.util import *
-from util import *
+from src.image.color_conversion import *
+from src.image.util import *
+from src.util import *
 
 
 class OmeSource:

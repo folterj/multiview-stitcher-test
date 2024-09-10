@@ -1,4 +1,4 @@
-from image.color_conversion import *
+from src.image.color_conversion import *
 
 
 def create_axes_metadata(dimension_order):

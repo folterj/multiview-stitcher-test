@@ -4,9 +4,9 @@ from ome_zarr.scale import Scaler
 from ome_zarr.writer import write_image
 import zarr
 
-from image.util import *
-from ome_zarr_util import *
-from util import *
+from src.image.util import *
+from src.ome_zarr_util import *
+from src.util import *
 
 
 class OmeZarr:

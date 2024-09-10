@@ -1,8 +1,6 @@
-from concurrent.futures import ThreadPoolExecutor
 from dask.diagnostics import ProgressBar
 import logging
 import matplotlib as mpl
-from distributed import Client, LocalCluster
 from matplotlib import pyplot as plt
 from multiview_stitcher import registration, fusion, msi_utils, vis_utils
 from multiview_stitcher import spatial_image_utils as si_utils
@@ -14,7 +12,7 @@ from tqdm import tqdm
 
 from src.OmeZarr import OmeZarr
 from src.TiffSource import TiffSource
-from src.util import get_value_units_micrometer
+from src.util import *
 
 
 mpl.rcParams['figure.dpi'] = 300
@@ -83,14 +81,12 @@ def register(msims, reg_channel=None, reg_channel_index=None):
         reg_channel_index = reg_channel
         reg_channel = None
     with ProgressBar():
-        client = Client(LocalCluster(processes=False, n_workers=1, threads_per_worker=4))
         mappings = registration.register(
             msims,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
-            new_transform_key="translation_registered",
-            scheduler=None
+            new_transform_key="translation_registered"
         )
 
     print('Fusing...')
@@ -104,7 +100,7 @@ def register(msims, reg_channel=None, reg_channel_index=None):
 def save_zarr(filename, image, source):
     #data.to_zarr(filename)
     if isinstance(image, SpatialImage):
-        source0.output_dimension_order = ''.join(image.dims)
+        source.output_dimension_order = ''.join(image.dims)
     zarr = OmeZarr(filename)
     zarr.write(image.data, source)
 
@@ -117,7 +113,9 @@ def convert_xyz_to_dict(xyz):
 def dir_regex(pattern):
     dir = os.path.dirname(pattern)
     file_pattern = os.path.basename(pattern)
-    return [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
+    files = [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
+    files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
+    return files_sorted
 
 
 def show_image(image, title='', cmap=None):
@@ -131,17 +129,24 @@ def show_image(image, title='', cmap=None):
     plt.show()
 
 
-if __name__ == '__main__':
+def run():
     #tiles = create_example_tiles()
     #reg_channel = "DAPI"
 
-    #file_pattern = ('D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*')
-    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_0_.*.ome.tif'
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_0_.*.ome.tif'
+    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
 
-    original_fused_filename = 'D:/slides/EM04768_01_substrate_04/original.ome.zarr'
-    registered_fused_filename = 'D:/slides/EM04768_01_substrate_04/registered.ome.zarr'
+    output_dir = 'output'
+
+    original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
+    original_fused_filename = os.path.join(output_dir, 'original.ome.zarr')
+    registered_tiles_filename = os.path.join(output_dir, 'tiles_registered.png')
+    registered_fused_filename = os.path.join(output_dir, 'registered.ome.zarr')
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     mvsr_logger = logging.getLogger('multiview_stitcher.registration')
     mvsr_logger.setLevel(logging.INFO)
@@ -150,6 +155,7 @@ if __name__ == '__main__':
 
     print('Initialising tiles...')
     filenames = dir_regex(file_pattern)
+    file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
     source0 = TiffSource(filenames[0])
     tiles = init_tiles(filenames)
 
@@ -162,16 +168,16 @@ if __name__ == '__main__':
         [msi_utils.get_sim_from_msim(msim) for msim in msims],
         transform_key='stage_metadata'
     )
-    print('Saving fused image...')
-    save_zarr(original_fused_filename, original_fused, source0)
-    #show_image(original_fused.data[0, 0, ...])
 
     # plot the tile configuration
     print('Plotting tiles...')
-    fig, ax = vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False)
-    for item in ax.texts:
-        item.set_fontsize(4)
-    fig.show()
+    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+                             custom_labels=file_indices, label_size=3,
+                             show_plot=False, output_filename=original_tiles_filename)
+
+    print('Saving fused image...')
+    save_zarr(original_fused_filename, original_fused, source0)
+    #show_image(original_fused.data[0, 0, ...])
 
     mappings, registered_fused = register(msims, reg_channel)
 
@@ -182,12 +188,15 @@ if __name__ == '__main__':
 
     # plot the tile configuration after registration
     print('Plotting tiles...')
-    fig, ax = vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False)
-    for item in ax.texts:
-        item.set_fontsize(4)
-    fig.show()
+    vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False,
+                             custom_labels=file_indices, label_size=3,
+                             show_plot=False, output_filename=registered_tiles_filename)
 
     print('Saving fused image...')
     save_zarr(registered_fused_filename, registered_fused, source0)
     #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
     #show_image(registered_fused.data[0, 0, ...])
+
+
+if __name__ == '__main__':
+    run()

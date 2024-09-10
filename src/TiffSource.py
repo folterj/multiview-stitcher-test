@@ -6,9 +6,9 @@ import numpy as np
 import os
 from tifffile import TiffFile, TiffPage, PHOTOMETRIC
 
-from OmeSource import OmeSource
-from image.util import *
-from util import *
+from src.OmeSource import OmeSource
+from src.image.util import *
+from src.util import *
 
 
 class TiffSource(OmeSource):

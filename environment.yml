@@ -1,11 +1,9 @@
-name: multiview-stitcher-test-env
+name: multiview-stitcher-cont-env
 channels:
  - conda-forge
  - defaults
 dependencies:
  - python=3.10
- - pyqt
- - napari
  - numpy
  - scipy
  - scikit-image
@@ -14,9 +12,11 @@ dependencies:
  - tifffile>=2023.9.26
  - zarr
  - ome-zarr
- - opencv-python
  - matplotlib
  - tqdm
  - pip
  - pip:
-   - -r requirements.txt
+#   - -r requirements.txt
+   - opencv-python
+   - spatial-image
+   - multiscale-spatial-image

@@ -124,6 +124,10 @@ def get_filetitle(filename: str) -> str:
     return title
 
 
+def find_all_numbers(text: str) -> list:
+    return list(map(int, re.findall(r'\d+', text)))
+
+
 def split_num_text(text: str) -> list:
     num_texts = []
     block = ''
