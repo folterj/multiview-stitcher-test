@@ -135,7 +135,8 @@ def run():
 
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_0_.*.ome.tif'
-    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
 
     output_dir = 'output'
@@ -172,7 +173,7 @@ def run():
     # plot the tile configuration
     print('Plotting tiles...')
     vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-                             custom_labels=file_indices, label_size=3,
+                             view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=original_tiles_filename)
 
     print('Saving fused image...')
@@ -189,7 +190,7 @@ def run():
     # plot the tile configuration after registration
     print('Plotting tiles...')
     vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False,
-                             custom_labels=file_indices, label_size=3,
+                             view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=registered_tiles_filename)
 
     print('Saving fused image...')
