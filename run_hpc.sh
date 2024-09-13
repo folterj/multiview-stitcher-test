@@ -8,6 +8,6 @@
 export PYTHONUNBUFFERED=TRUE
 #ml purge
 #ml Anaconda3
-#source /camp/apps/eb/software/Anaconda3/2020.07/etc/profile.d/conda.sh
+source /camp/apps/eb/software/Anaconda/conda.env.sh
 conda activate multiview-stitcher-cont-env
 python run.py

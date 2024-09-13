@@ -15,6 +15,11 @@ except:
 from src.util import *
 
 
+def save_image(image: np.ndarray, filename: str, output_params: dict = {}):
+    compression = output_params.get('compression')
+    PIL.Image.fromarray(image).save(filename, compression=compression)
+
+
 def show_image(image: np.ndarray):
     plt.imshow(image)
     plt.show()
@@ -461,22 +466,50 @@ def blur_image(image, sigma):
     return new_image
 
 
-def calc_tiles_median(images):
-    out_image = np.zeros_like(images[0])
+def calc_images_median(images):
+    out_image = np.zeros(shape=images[0].shape, dtype=images[0].dtype)
     median_image = np.median(images, 0, out_image)
     return median_image
 
 
-def calc_tiles_quantiles(images, quantiles):
-    out_quantiles = []
-    quantile_images = np.quantile(images, quantiles, 0)
-    for quantile_image in quantile_images:
-        maxval = 2 ** (8 * images[0].dtype.itemsize) - 1
-        image = (quantile_image / maxval).astype(np.float32)
-        out_quantiles.append(image)
-    return out_quantiles
+def calc_images_quantiles(images, quantiles):
+    quantile_images = [image.astype(np.float32) for image in np.quantile(images, quantiles, 0)]
+    return quantile_images
 
 
-def save_image(image: np.ndarray, filename: str, output_params: dict = {}):
-    compression = output_params.get('compression')
-    PIL.Image.fromarray(image).save(filename, compression=compression)
+def create_normalisation_images(images, quantiles, nchannels=1):
+    channel_images2 = []
+    for channeli in range(nchannels):
+        if nchannels > 1:
+            channel_images = [image[..., channeli] for image in images]
+        else:
+            channel_images = images
+        # Filter tiles with signal
+        median_image = calc_images_median(channel_images)
+        difs = [np.mean(np.abs(image.astype(np.float32) - median_image.astype(np.float32)), (0, 1)) for image in images]
+        threshold = np.mean(difs, 0)
+        images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
+        norm_images = calc_images_quantiles(images, quantiles)
+        channel_images2.append(norm_images)
+
+    quantile_images = []
+    for quantilei in range(len(quantiles)):
+        quantile_image = None
+        for channel_image in channel_images2:
+            image = channel_image[quantilei]
+            if quantile_image is None:
+                quantile_image = image
+            else:
+                quantile_image = cv.merge(list(cv.split(quantile_image)) + [image])
+        quantile_images.append(quantile_image)
+    return quantile_images
+
+
+def flatfield_correction(image0, dark=0, bright=1, clip=True):
+    # Input/output: float images
+    # https://en.wikipedia.org/wiki/Flat-field_correction
+    mean_bright_dark = np.mean(bright - dark, (0, 1))
+    image = (image0 - dark) * mean_bright_dark / (bright - dark)
+    if clip:
+        image = np.clip(image, 0, 1)
+    return image

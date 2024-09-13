@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from src.OmeZarr import OmeZarr
 from src.TiffSource import TiffSource
+from src.image.util import *
 from src.util import *
 
 
@@ -37,22 +38,34 @@ def create_example_tiles():
     return tiles
 
 
-def init_tiles(files):
+def init_tiles(files, flatfield_quantile=None):
     tiles = []
-    for file in tqdm(files):
-        source = TiffSource(file)
+    sources = [TiffSource(file) for file in files]
+    nchannels = sources[0].get_nchannels()
+    images = [source.get_source_dask()[0] for source in tqdm(sources)]
+
+    if flatfield_quantile is not None:
+        norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
+        dtype = images[0].dtype
+        max_image = norm_images[0]
+        maxval = 2 ** (8 * dtype.itemsize) - 1
+        max_image = max_image / np.float32(maxval)
+        images = [float2int_image(flatfield_correction(int2float_image(image), bright=max_image), dtype) for image in images]
+
+    for source, image in zip(sources, images):
         translation = convert_xyz_to_dict(get_value_units_micrometer(source.position))
+        # coordinates seem to be inverted
+        translation['x'] = -translation['x']
+        translation['y'] = -translation['y']
+        # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
         if not translation.keys() == scale.keys():
             translation = {key: translation[key] for key in scale.keys()}
-        data = source.get_source_dask()[0]
-        # rotate 180 degrees
-        data = data[::-1, ::-1]
         tile = {'dim_order': source.dimension_order,
                 'translation': translation,
                 'scale': scale,
                 'channels': source.get_channels(),
-                'data': data}
+                'data': image}
         tiles.append(tile)
     return tiles
 
@@ -86,7 +99,8 @@ def register(msims, reg_channel=None, reg_channel_index=None):
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
-            new_transform_key="translation_registered"
+            new_transform_key="translation_registered",
+            plot_summary=True
         )
 
     print('Fusing...')
@@ -134,12 +148,14 @@ def run():
     #reg_channel = "DAPI"
 
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_0_.*.ome.tif'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
 
     output_dir = 'output'
+
+    flatfield_quantile = 0.95
 
     original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
     original_fused_filename = os.path.join(output_dir, 'original.ome.zarr')
@@ -158,7 +174,7 @@ def run():
     filenames = dir_regex(file_pattern)
     file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
     source0 = TiffSource(filenames[0])
-    tiles = init_tiles(filenames)
+    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile)
 
     print('Converting tiles...')
     msims = images_to_msims(tiles)
