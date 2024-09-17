@@ -162,4 +162,4 @@ cython_debug/
 #.idea/
 /.idea
 /output
-/output_full_1
+/output_archived

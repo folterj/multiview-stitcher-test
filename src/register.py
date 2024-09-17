@@ -45,6 +45,7 @@ def init_tiles(files, flatfield_quantile=None):
     images = [source.get_source_dask()[0] for source in tqdm(sources)]
 
     if flatfield_quantile is not None:
+        print('Applying flatfield correction...')
         norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
         dtype = images[0].dtype
         max_image = norm_images[0]
@@ -88,18 +89,38 @@ def images_to_msims(tiles):
     return msims
 
 
-def register(msims, reg_channel=None, reg_channel_index=None):
-    print('Registering...')
+def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
+
+    if filter_foreground:
+        print('Filtering foreground tiles...')
+        tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
+        threshold = np.median(tile_vars)
+        foregrounds = (tile_vars > threshold)
+        foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
+        not_foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if not foreground]
+        print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
+
+        # duplicate transform keys
+        for msim in not_foreground_msims:
+            transform = msi_utils.get_transform_from_msim(msim, 'stage_metadata')
+            msi_utils.set_affine_transform(msim, transform, 'translation_registered')
+        register_msims = foreground_msims
+    else:
+        register_msims = msims
+
+    print('Registering...')
     with ProgressBar():
         mappings = registration.register(
-            msims,
+            register_msims,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
             new_transform_key="translation_registered",
+            pre_registration_pruning_method=None,  # no alteration of the pairs
+            registration_binning={'x': 1, 'y': 1},
             plot_summary=True
         )
 
@@ -147,15 +168,16 @@ def run():
     #tiles = create_example_tiles()
     #reg_channel = "DAPI"
 
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
+    flatfield_quantile = 0.95
+    filter_foreground = True
 
     output_dir = 'output'
 
-    flatfield_quantile = 0.95
 
     original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
     original_fused_filename = os.path.join(output_dir, 'original.ome.zarr')
@@ -178,11 +200,12 @@ def run():
 
     print('Converting tiles...')
     msims = images_to_msims(tiles)
+    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
 
     # before registration:
     print('Fusing original...')
     original_fused = fusion.fuse(
-        [msi_utils.get_sim_from_msim(msim) for msim in msims],
+        sims,
         transform_key='stage_metadata'
     )
 
@@ -196,7 +219,7 @@ def run():
     save_zarr(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
-    mappings, registered_fused = register(msims, reg_channel)
+    mappings, registered_fused = register(sims, msims, reg_channel, filter_foreground=filter_foreground)
 
     print('Registration mappings (delta position offsets for each tile):')
     for mapping in mappings:
