@@ -1,4 +1,5 @@
 from dask.diagnostics import ProgressBar
+import json
 import logging
 import matplotlib as mpl
 from matplotlib import pyplot as plt
@@ -114,11 +115,14 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
                 transform_key='translation_registered',
                 base_transform_key='stage_metadata')
 
+        indices = np.where(foregrounds)[0]
         register_msims = foreground_msims
     else:
+        indices = range(len(msims))
         register_msims = msims
 
     print('Registering...')
+    progress = tqdm()
     with ProgressBar():
         mappings = registration.register(
             register_msims,
@@ -126,17 +130,20 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
             new_transform_key="translation_registered",
-            pre_registration_pruning_method=None,  # no alteration of the pairs
+            pre_registration_pruning_method='otsu_threshold_on_overlap',
             registration_binning={'x': 1, 'y': 1},
             plot_summary=True
         )
+    progress.update()
+    progress.close()
+    mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
 
     print('Fusing...')
     fused_image = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim) for msim in msims],
         transform_key="translation_registered"
     )
-    return mappings, fused_image
+    return mappings_dict, fused_image
 
 
 def save_zarr(filename, image, source):
@@ -185,7 +192,6 @@ def run():
 
     output_dir = 'output'
 
-
     original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
     original_fused_filename = os.path.join(output_dir, 'original.ome.zarr')
     registered_tiles_filename = os.path.join(output_dir, 'tiles_registered.png')
@@ -227,11 +233,9 @@ def run():
     #show_image(original_fused.data[0, 0, ...])
 
     mappings, registered_fused = register(sims, msims, reg_channel, filter_foreground=filter_foreground)
-
-    print('Registration mappings (delta position offsets for each tile):')
-    for mapping in mappings:
-        print(mapping.data)
-        print()
+    mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
+    with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
+        json.dump(mappings2, file, indent=4)
 
     # plot the tile configuration after registration
     print('Plotting tiles...')
