@@ -2,7 +2,7 @@ from dask.diagnostics import ProgressBar
 import logging
 import matplotlib as mpl
 from matplotlib import pyplot as plt
-from multiview_stitcher import registration, fusion, msi_utils, vis_utils
+from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
@@ -104,9 +104,16 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
         print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
+        #for msim in not_foreground_msims:
+        #    transform = msi_utils.get_transform_from_msim(msim, 'stage_metadata')
+        #    msi_utils.set_affine_transform(msim, transform, 'translation_registered')
         for msim in not_foreground_msims:
-            transform = msi_utils.get_transform_from_msim(msim, 'stage_metadata')
-            msi_utils.set_affine_transform(msim, transform, 'translation_registered')
+            msi_utils.set_affine_transform(
+                msim,
+                param_utils.identity_transform(ndim=2, t_coords=[0]),
+                transform_key='translation_registered',
+                base_transform_key='stage_metadata')
+
         register_msims = foreground_msims
     else:
         register_msims = msims
