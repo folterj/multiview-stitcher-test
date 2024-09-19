@@ -166,3 +166,4 @@ cython_debug/
 /output_prune_alternate
 /output_prune_none
 /output_prune_otsu
+/output_shortest_path

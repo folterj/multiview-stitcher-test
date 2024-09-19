@@ -3,6 +3,7 @@ import json
 import logging
 import matplotlib as mpl
 from matplotlib import pyplot as plt
+import multiview_stitcher
 from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
@@ -90,6 +91,32 @@ def images_to_msims(tiles):
     return msims
 
 
+def get_orthogonal_pairs_from_msims(msims):
+    """
+    Get pairs of orthogonal neighbors from a list of msims.
+    This assumes that the msims are placed on a regular grid.
+    """
+
+    # get positions (image origins) of msims to be registered
+    sim0 = msi_utils.get_sim_from_msim(msims[0])
+    spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+    size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+    origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
+                        for msim in msims])
+    #threshold = [np.mean(np.diff(np.sort(origins[:, dimi]))) for dimi in range(len(spatial_dims))]
+    threshold = np.array(size)
+    threshold_half = threshold / 2
+
+    # get pairs of neighboring msims
+    pairs = []
+    for i, j in np.transpose(np.triu_indices(len(msims), 1)):
+        relvec = abs(origins[i] - origins[j])
+        if np.any(relvec < threshold_half) and np.all(relvec < threshold):
+            pairs.append((i, j))
+
+    return pairs
+
+
 def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
@@ -123,6 +150,8 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
 
     print('Registering...')
     progress = tqdm()
+
+    pairs = get_orthogonal_pairs_from_msims(register_msims)
     with ProgressBar():
         mappings = registration.register(
             register_msims,
@@ -130,7 +159,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
             reg_channel_index=reg_channel_index,
             transform_key="stage_metadata",
             new_transform_key="translation_registered",
-            pre_registration_pruning_method='otsu_threshold_on_overlap',
+            pairs=pairs,
             registration_binning={'x': 1, 'y': 1},
             plot_summary=True
         )
@@ -179,13 +208,15 @@ def show_image(image, title='', cmap=None):
 
 
 def run():
+    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+
     #tiles = create_example_tiles()
     #reg_channel = "DAPI"
 
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     reg_channel = 0
     flatfield_quantile = 0.95
     filter_foreground = True
@@ -247,6 +278,8 @@ def run():
     save_zarr(registered_fused_filename, registered_fused, source0)
     #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
     #show_image(registered_fused.data[0, 0, ...])
+
+    print('Done!')
 
 
 if __name__ == '__main__':
