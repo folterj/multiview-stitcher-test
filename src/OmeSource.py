@@ -37,6 +37,7 @@ class OmeSource:
     position: list
     """source position information"""
 
+    default_properties_order = 'xyzct'
     default_physical_unit = 'µm'
 
     def __init__(self):
@@ -90,9 +91,9 @@ class OmeSource:
 
         position = []
         for plane in ensure_list(pixels.get('Plane', [])):
-            position = [(plane.get('PositionX'), plane.get('PositionXUnit')),
-                        (plane.get('PositionY'), plane.get('PositionYUnit')),
-                        (plane.get('PositionZ'), plane.get('PositionZUnit'))]
+            position = [(float(plane.get('PositionX')), plane.get('PositionXUnit')),
+                        (float(plane.get('PositionY')), plane.get('PositionYUnit')),
+                        (float(plane.get('PositionZ')), plane.get('PositionZUnit'))]
             c, z, t = plane.get('TheC'), plane.get('TheZ'), plane.get('TheT')
 
         self.position = position
@@ -208,6 +209,9 @@ class OmeSource:
 
     def get_pixel_size_micrometer(self):
         return get_value_units_micrometer(self.get_pixel_size())
+
+    def get_position_micrometer(self):
+        return get_value_units_micrometer(self.position)
 
     def get_shape(self, dimension_order: str = None, xyzct: tuple = None) -> tuple:
         shape = []

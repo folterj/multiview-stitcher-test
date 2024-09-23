@@ -20,7 +20,7 @@ def create_axes_metadata(dimension_order):
     return axes
 
 
-def create_transformation_metadata(dimension_order, pixel_size_um, scale, translation=[]):
+def create_transformation_metadata(dimension_order, pixel_size_um, scale, translation_um=[]):
     metadata = []
     pixel_size_scale = []
     translation_scale = []
@@ -37,12 +37,12 @@ def create_transformation_metadata(dimension_order, pixel_size_um, scale, transl
             pixel_size_scale1 = 1
         pixel_size_scale.append(pixel_size_scale1)
 
-        if dimension == 'z' and len(translation) > 2:
-            translation1 = translation[2]
-        elif dimension == 'y' and len(translation) > 1:
-            translation1 = translation[1] / scale
-        elif dimension == 'x' and len(translation) > 0:
-            translation1 = translation[0] / scale
+        if dimension == 'z' and len(translation_um) > 2:
+            translation1 = translation_um[2]
+        elif dimension == 'y' and len(translation_um) > 1:
+            translation1 = translation_um[1] * scale
+        elif dimension == 'x' and len(translation_um) > 0:
+            translation1 = translation_um[0] * scale
         else:
             translation1 = 0
         translation_scale.append(translation1)

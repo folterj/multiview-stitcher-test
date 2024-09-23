@@ -48,10 +48,10 @@ class OmeZarr:
             else:
                 root = zarr_root
             if index < len(translations):
-                translation = translations[index]
+                translation_um = translations[index]
             else:
-                translation = []
-            self.write_dataset(root, data1, source, npyramid_add, pyramid_downsample, translation)
+                translation_um = source.get_position_micrometer()
+            self.write_dataset(root, data1, source, npyramid_add, pyramid_downsample, translation_um)
             if multiple_images:
                 meta = root.attrs['multiscales'][0].copy()
                 for dataset_meta in meta['datasets']:
@@ -62,7 +62,7 @@ class OmeZarr:
         zarr_root.attrs['omero'] = create_channel_metadata(sources[0], ome_version)
 
     def write_dataset(self, zarr_root, data, source,
-                      npyramid_add=0, pyramid_downsample=2, translation=[]):
+                      npyramid_add=0, pyramid_downsample=2, translation_um=[]):
 
         pixel_size_um = source.get_pixel_size_micrometer()
         if len(pixel_size_um) == 0:
@@ -79,7 +79,7 @@ class OmeZarr:
         pixel_size_scales = []
         scale = 1
         for i in range(npyramid_add + 1):
-            pixel_size_scales.append(create_transformation_metadata(dimension_order, pixel_size_um, scale, translation))
+            pixel_size_scales.append(create_transformation_metadata(dimension_order, pixel_size_um, scale, translation_um))
             if pyramid_downsample:
                 scale /= pyramid_downsample
 

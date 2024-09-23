@@ -13,6 +13,7 @@ from spatial_image import SpatialImage
 from tqdm import tqdm
 
 from src.OmeZarr import OmeZarr
+from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
 from src.image.util import *
 from src.util import *
@@ -40,11 +41,29 @@ def create_example_tiles():
     return tiles
 
 
-def init_tiles(files, flatfield_quantile=None):
+def create_source(filename):
+    ext = os.path.splitext(filename)[1].lstrip('.').lower()
+    if ext.startswith('tif'):
+        source = TiffSource(filename)
+    elif ext.startswith('zar'):
+        source = OmeZarrSource(filename)
+    else:
+        raise ValueError(f'Unsupported file type: {ext}')
+    return source
+
+
+def init_tiles(files, flatfield_quantile=None, invert_coordinates=False):
     tiles = []
-    sources = [TiffSource(file) for file in files]
+    sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
-    images = [source.get_source_dask()[0] for source in tqdm(sources)]
+    images = []
+    for source in tqdm(sources):
+        output_order = 'yx'
+        if source.get_nchannels() > 1:
+            output_order += 'c'
+        image = redimension_data(source.get_source_dask()[0],
+                                 source.dimension_order, output_order)
+        images.append(image)
 
     if flatfield_quantile is not None:
         print('Applying flatfield correction...')
@@ -57,14 +76,14 @@ def init_tiles(files, flatfield_quantile=None):
 
     for source, image in zip(sources, images):
         translation = convert_xyz_to_dict(get_value_units_micrometer(source.position))
-        # coordinates seem to be inverted
-        translation['x'] = -translation['x']
-        translation['y'] = -translation['y']
+        if invert_coordinates:
+            translation['x'] = -translation['x']
+            translation['y'] = -translation['y']
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
         if not translation.keys() == scale.keys():
-            translation = {key: translation[key] for key in scale.keys()}
-        tile = {'dim_order': source.dimension_order,
+            translation = {key: translation.get(key, 0) for key in scale.keys()}
+        tile = {'dim_order': output_order,
                 'translation': translation,
                 'scale': scale,
                 'channels': source.get_channels(),
@@ -87,7 +106,7 @@ def images_to_msims(tiles):
             transform_key="stage_metadata",
             c_coords=channel_labels
         )
-        msims.append(msi_utils.get_msim_from_sim(sim, scale_factors=[]))
+        msims.append(msi_utils.get_msim_from_sim(sim))
     return msims
 
 
@@ -117,7 +136,7 @@ def get_orthogonal_pairs_from_msims(msims):
     return pairs
 
 
-def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False):
+def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False, use_orthogonal_pairs=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
@@ -151,7 +170,10 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
     print('Registering...')
     progress = tqdm()
 
-    pairs = get_orthogonal_pairs_from_msims(register_msims)
+    if use_orthogonal_pairs:
+        pairs = get_orthogonal_pairs_from_msims(register_msims)
+    else:
+        pairs = None
     with ProgressBar():
         mappings = registration.register(
             register_msims,
@@ -161,7 +183,6 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
             new_transform_key="translation_registered",
             pairs=pairs,
             pre_registration_pruning_method=None,
-            registration_binning={'x': 1, 'y': 1},
             plot_summary=True
         )
     progress.update()
@@ -211,16 +232,25 @@ def show_image(image, title='', cmap=None):
 def run():
     print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
-    #tiles = create_example_tiles()
-    #reg_channel = "DAPI"
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    input = ['output_orth_pairs/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
-    #file_pattern = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    file_pattern = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+
+    #invert_coordinates = True
+    #flatfield_quantile = 0.95
+    #filter_foreground = True
+    #use_orthogonal_pairs = True
+
+    invert_coordinates = False
+    flatfield_quantile = None
+    filter_foreground = False
+    use_orthogonal_pairs = False
+
     reg_channel = 0
-    flatfield_quantile = 0.95
-    filter_foreground = True
 
     output_dir = 'output'
 
@@ -238,10 +268,14 @@ def run():
         mvsr_logger.addHandler(logging.StreamHandler())
 
     print('Initialising tiles...')
-    filenames = dir_regex(file_pattern)
-    file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
-    source0 = TiffSource(filenames[0])
-    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile)
+    if isinstance(input, list):
+        filenames = input
+        file_indices = list(range(len(filenames)))
+    else:
+        filenames = dir_regex(input)
+        file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
+    source0 = create_source(filenames[0])
+    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_coordinates=invert_coordinates)
 
     print('Converting tiles...')
     msims = images_to_msims(tiles)
@@ -264,7 +298,9 @@ def run():
     save_zarr(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
-    mappings, registered_fused = register(sims, msims, reg_channel, filter_foreground=filter_foreground)
+    mappings, registered_fused = register(sims, msims, reg_channel,
+                                          filter_foreground=filter_foreground,
+                                          use_orthogonal_pairs=use_orthogonal_pairs)
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
         json.dump(mappings2, file, indent=4)
