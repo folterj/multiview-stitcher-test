@@ -141,6 +141,8 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
         reg_channel_index = reg_channel
         reg_channel = None
 
+    spatial_dims = si_utils.get_spatial_dims_from_sim(sims[0])
+
     if filter_foreground:
         print('Filtering foreground tiles...')
         tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
@@ -158,7 +160,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
             msi_utils.set_affine_transform(
                 msim,
                 param_utils.identity_transform(ndim=2, t_coords=[0]),
-                transform_key='translation_registered',
+                transform_key='registered',
                 base_transform_key='stage_metadata')
 
         indices = np.where(foregrounds)[0]
@@ -175,16 +177,58 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
     else:
         pairs = None
     with ProgressBar():
-        mappings = registration.register(
+        #mappings = registration.register(
+        #    register_msims,
+        #    reg_channel=reg_channel,
+        #    reg_channel_index=reg_channel_index,
+        #    transform_key="stage_metadata",
+        #    new_transform_key="translation_registered",
+        #    pairs=pairs,
+        #    pre_registration_pruning_method=None,
+        #    plot_summary=True
+        #)
+
+        registration_binning = {'y': 8, 'x': 8}
+        if 'z' in spatial_dims:
+            registration_binning['z'] = 2
+
+        # phase shift registration
+        mappings1 = registration.register(
             register_msims,
+            registration_binning=registration_binning,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
-            transform_key="stage_metadata",
-            new_transform_key="translation_registered",
+            transform_key='stage_metadata',
+            new_transform_key='translation_registered',
             pairs=pairs,
             pre_registration_pruning_method=None,
+            groupwise_resolution_kwargs={
+                'transform': 'translation',
+            },
             plot_summary=True
         )
+
+        # affine registration
+        mappings2 = registration.register(
+            register_msims,
+            registration_binning=registration_binning,
+            reg_channel=reg_channel,
+            reg_channel_index=reg_channel_index,
+            transform_key='translation_registered',
+            new_transform_key='registered',
+            pairs=pairs,
+            pre_registration_pruning_method=None,
+            pairwise_reg_func=registration.registration_ANTsPy,
+            pairwise_reg_func_kwargs={
+                'transform_types': ['Rigid'],  # could also add 'Affine'
+            },
+            groupwise_resolution_kwargs={
+                'transform': 'rigid',  # could also be affine
+            },
+            plot_summary=True
+        )
+        mappings = mappings2
+
     progress.update()
     progress.close()
     mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
@@ -192,7 +236,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
     print('Fusing...')
     fused_image = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim) for msim in msims],
-        transform_key="translation_registered"
+        transform_key="registered"
     )
     return mappings_dict, fused_image
 
@@ -236,19 +280,19 @@ def run():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    input = ['output_orth_pairs/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
+    #input = ['output_orth_pairs/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
-    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
 
-    #invert_coordinates = True
-    #flatfield_quantile = 0.95
-    #filter_foreground = True
-    #use_orthogonal_pairs = True
+    invert_coordinates = True
+    flatfield_quantile = 0.95
+    filter_foreground = True
+    use_orthogonal_pairs = True
 
-    invert_coordinates = False
-    flatfield_quantile = None
-    filter_foreground = False
-    use_orthogonal_pairs = False
+    #invert_coordinates = False
+    #flatfield_quantile = None
+    #filter_foreground = False
+    #use_orthogonal_pairs = False
 
     reg_channel = 0
 
@@ -282,20 +326,20 @@ def run():
     sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
 
     # before registration:
-    print('Fusing original...')
-    original_fused = fusion.fuse(
-        sims,
-        transform_key='stage_metadata'
-    )
+    #print('Fusing original...')
+    #original_fused = fusion.fuse(
+    #    sims,
+    #    transform_key='stage_metadata'
+    #)
 
     # plot the tile configuration
-    print('Plotting tiles...')
-    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-                             view_labels=file_indices, view_labels_size=3,
-                             show_plot=False, output_filename=original_tiles_filename)
+    #print('Plotting tiles...')
+    #vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+    #                         view_labels=file_indices, view_labels_size=3,
+    #                         show_plot=False, output_filename=original_tiles_filename)
 
-    print('Saving fused image...')
-    save_zarr(original_fused_filename, original_fused, source0)
+    #print('Saving fused image...')
+    #save_zarr(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
     mappings, registered_fused = register(sims, msims, reg_channel,
@@ -307,7 +351,7 @@ def run():
 
     # plot the tile configuration after registration
     print('Plotting tiles...')
-    vis_utils.plot_positions(msims, transform_key='translation_registered', use_positional_colors=False,
+    vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=registered_tiles_filename)
 

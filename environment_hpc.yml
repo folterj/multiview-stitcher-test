@@ -1,4 +1,4 @@
-name: multiview-stitcher-cont-env
+name: multiview-stitcher-env
 channels:
  - conda-forge
  - defaults
@@ -17,7 +17,7 @@ dependencies:
  - tqdm
  - pip
  - pip:
-   - git+https://github.com/folterj/multiview-stitcher
+   - -r requirements.txt
    - opencv-python
    - spatial-image
    - multiscale-spatial-image
