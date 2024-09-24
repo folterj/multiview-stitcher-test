@@ -13,7 +13,6 @@ dependencies:
  - zarr
  - ome-zarr
  - matplotlib
- - json
  - tqdm
  - pip
  - pip:
