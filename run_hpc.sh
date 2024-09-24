@@ -9,5 +9,5 @@ export PYTHONUNBUFFERED=TRUE
 ml purge
 ml Anaconda3
 source /camp/apps/eb/software/Anaconda/conda.env.sh
-conda activate multiview-stitcher-cont-env
+conda activate multiview-stitcher-env
 python run.py
