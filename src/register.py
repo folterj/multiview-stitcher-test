@@ -188,14 +188,9 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
         #    plot_summary=True
         #)
 
-        registration_binning = {'y': 8, 'x': 8}
-        if 'z' in spatial_dims:
-            registration_binning['z'] = 2
-
         # phase shift registration
         mappings1 = registration.register(
             register_msims,
-            registration_binning=registration_binning,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key='stage_metadata',
@@ -211,7 +206,6 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
         # affine registration
         mappings2 = registration.register(
             register_msims,
-            registration_binning=registration_binning,
             reg_channel=reg_channel,
             reg_channel_index=reg_channel_index,
             transform_key='translation_registered',

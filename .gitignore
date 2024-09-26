@@ -170,3 +170,4 @@ cython_debug/
 /output_orth_pairs
 /output_fluor_orth
 /output_layers
+/output_rotation
