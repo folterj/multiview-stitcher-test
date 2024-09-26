@@ -298,14 +298,13 @@ def run0():
     reg_channel = 0
 
     output_dir = 'output'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
     original_fused_filename = os.path.join(output_dir, 'original.ome.zarr')
     registered_tiles_filename = os.path.join(output_dir, 'tiles_registered.png')
     registered_fused_filename = os.path.join(output_dir, 'registered.ome.zarr')
-
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
 
     mvsr_logger = logging.getLogger('multiview_stitcher.registration')
     mvsr_logger.setLevel(logging.INFO)
@@ -365,6 +364,8 @@ def run0():
 
 def run():
     output_dir = 'output'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
