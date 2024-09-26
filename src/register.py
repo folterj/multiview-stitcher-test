@@ -136,7 +136,8 @@ def get_orthogonal_pairs_from_msims(msims):
     return pairs
 
 
-def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False, use_orthogonal_pairs=False):
+def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreground=False,
+             use_orthogonal_pairs=False, use_rotation=False, fuse_all=True):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
@@ -177,59 +178,63 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
     else:
         pairs = None
     with ProgressBar():
-        #mappings = registration.register(
-        #    register_msims,
-        #    reg_channel=reg_channel,
-        #    reg_channel_index=reg_channel_index,
-        #    transform_key="stage_metadata",
-        #    new_transform_key="translation_registered",
-        #    pairs=pairs,
-        #    pre_registration_pruning_method=None,
-        #    plot_summary=True
-        #)
-
-        # phase shift registration
-        mappings1 = registration.register(
-            register_msims,
-            reg_channel=reg_channel,
-            reg_channel_index=reg_channel_index,
-            transform_key='stage_metadata',
-            new_transform_key='translation_registered',
-            pairs=pairs,
-            pre_registration_pruning_method=None,
-            groupwise_resolution_kwargs={
-                'transform': 'translation',
-            },
-            plot_summary=True
-        )
-
-        # affine registration
-        mappings2 = registration.register(
-            register_msims,
-            reg_channel=reg_channel,
-            reg_channel_index=reg_channel_index,
-            transform_key='translation_registered',
-            new_transform_key='registered',
-            pairs=pairs,
-            pre_registration_pruning_method=None,
-            pairwise_reg_func=registration.registration_ANTsPy,
-            pairwise_reg_func_kwargs={
-                'transform_types': ['Rigid'],  # could also add 'Affine'
-            },
-            groupwise_resolution_kwargs={
-                'transform': 'rigid',  # could also be affine
-            },
-            plot_summary=True
-        )
-        mappings = mappings2
+        if use_rotation:
+            # phase shift registration
+            mappings1 = registration.register(
+                register_msims,
+                reg_channel=reg_channel,
+                reg_channel_index=reg_channel_index,
+                transform_key='stage_metadata',
+                new_transform_key='translation_registered',
+                pairs=pairs,
+                pre_registration_pruning_method=None,
+                groupwise_resolution_kwargs={
+                    'transform': 'translation',
+                },
+                plot_summary=True
+            )
+            # affine registration
+            mappings2 = registration.register(
+                register_msims,
+                reg_channel=reg_channel,
+                reg_channel_index=reg_channel_index,
+                transform_key='translation_registered',
+                new_transform_key='registered',
+                pairs=pairs,
+                pre_registration_pruning_method=None,
+                pairwise_reg_func=registration.registration_ANTsPy,
+                pairwise_reg_func_kwargs={
+                    'transform_types': ['Rigid'],  # could also add 'Affine'
+                },
+                groupwise_resolution_kwargs={
+                    'transform': 'rigid',  # could also be affine
+                },
+                plot_summary=True
+            )
+            mappings = mappings2
+        else:
+            mappings = registration.register(
+               register_msims,
+               reg_channel=reg_channel,
+               reg_channel_index=reg_channel_index,
+               transform_key="stage_metadata",
+               new_transform_key="registered",
+               pairs=pairs,
+               pre_registration_pruning_method=None,
+               plot_summary=True
+            )
 
     progress.update()
     progress.close()
     mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
 
     print('Fusing...')
+    if fuse_all:
+        fuse_msims = msims
+    else:
+        fuse_msims = register_msims
     fused_image = fusion.fuse(
-        [msi_utils.get_sim_from_msim(msim) for msim in msims],
+        [msi_utils.get_sim_from_msim(msim) for msim in fuse_msims],
         transform_key="registered"
     )
     return mappings_dict, fused_image
@@ -237,6 +242,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
 
 def save_zarr(filename, image, source):
     #image.to_zarr(filename)    # gives attribute error (creates empty attr dictionary) in xarray.to_zarr
+    #msi_utils.multiscale_spatial_image_to_zarr(msi_utils.get_msim_from_sim(image), filename)   # creates 'scaleX' keys
     if isinstance(image, SpatialImage):
         source.output_dimension_order = ''.join(image.dims)
     zarr = OmeZarr(filename)
@@ -267,17 +273,16 @@ def show_image(image, title='', cmap=None):
     plt.show()
 
 
-def run():
+def run0():
     print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    #input = ['output_orth_pairs/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
-
     #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
+
+    #input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
     #invert_coordinates = True
     #flatfield_quantile = 0.95
@@ -288,6 +293,7 @@ def run():
     flatfield_quantile = None
     filter_foreground = False
     use_orthogonal_pairs = False
+    use_rotation = False
 
     reg_channel = 0
 
@@ -339,7 +345,8 @@ def run():
 
     mappings, registered_fused = register(sims, msims, reg_channel,
                                           filter_foreground=filter_foreground,
-                                          use_orthogonal_pairs=use_orthogonal_pairs)
+                                          use_orthogonal_pairs=use_orthogonal_pairs,
+                                          use_rotation=use_rotation)
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
         json.dump(mappings2, file, indent=4)
@@ -355,8 +362,63 @@ def run():
     #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
     #show_image(registered_fused.data[0, 0, ...])
 
-    print('Done!')
+
+def run():
+    output_dir = 'output'
+
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    filenames = dir_regex(input)
+    source0 = create_source(filenames[0])
+    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_coordinates=True)
+    msims = images_to_msims(tiles)
+    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+    mappings1, registered_fused1 = register(sims, msims, 0,
+                                            filter_foreground=True,
+                                            use_orthogonal_pairs=True,
+                                            use_rotation=False,
+                                            fuse_all=False)
+
+    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    filenames = dir_regex(input)
+    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_coordinates=True)
+    msims = images_to_msims(tiles)
+    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+    mappings2, registered_fused2 = register(sims, msims, 0,
+                                            filter_foreground=True,
+                                            use_orthogonal_pairs=True,
+                                            use_rotation=False,
+                                            fuse_all=False)
+
+    sims = [registered_fused1, registered_fused2]
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
+    # set dummy position
+    for msim in msims:
+        msi_utils.set_affine_transform(msim,
+                                       param_utils.identity_transform(ndim=2, t_coords=[0]),
+                                       transform_key='stage_metadata')
+    mappings, registered_fused = register(sims, msims, 0,
+                                          filter_foreground=False,
+                                          use_orthogonal_pairs=False,
+                                          use_rotation=False)
+    with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
+        json.dump(mappings, file, indent=4)
+    registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')
+    registered_fused_filename = os.path.join(output_dir, 'registered.ome.zarr')
+
+    # plot the tile configuration after registration
+    print('Plotting tiles...')
+    vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
+                             show_plot=False, output_filename=registered_tiles_filename)
+
+    print('Saving fused image...')
+    save_zarr(registered_fused_filename, registered_fused, source0)
+    # TODO: save channels to zarr using mappings offset
 
 
 if __name__ == '__main__':
     run()
+    print('Done!')
