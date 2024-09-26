@@ -236,7 +236,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
 
 
 def save_zarr(filename, image, source):
-    #data.to_zarr(filename)
+    #image.to_zarr(filename)    # gives attribute error (creates empty attr dictionary) in xarray.to_zarr
     if isinstance(image, SpatialImage):
         source.output_dimension_order = ''.join(image.dims)
     zarr = OmeZarr(filename)
@@ -276,17 +276,18 @@ def run():
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     #input = ['output_orth_pairs/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
-    invert_coordinates = True
-    flatfield_quantile = 0.95
-    filter_foreground = True
-    use_orthogonal_pairs = True
+    #invert_coordinates = True
+    #flatfield_quantile = 0.95
+    #filter_foreground = True
+    #use_orthogonal_pairs = True
 
-    #invert_coordinates = False
-    #flatfield_quantile = None
-    #filter_foreground = False
-    #use_orthogonal_pairs = False
+    invert_coordinates = False
+    flatfield_quantile = None
+    filter_foreground = False
+    use_orthogonal_pairs = False
 
     reg_channel = 0
 

@@ -161,13 +161,8 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 /.idea
-/output
-/output_archived
-/output_prune_alternate
-/output_prune_none
-/output_prune_otsu
-/output_shortest_path
-/output_orth_pairs
-/output_fluor_orth
-/output_layers
-/output_rotation
+*.png
+*.tif
+*.tiff
+*.z*
+*.json
