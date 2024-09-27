@@ -1,5 +1,5 @@
 import ast
-import json
+import cv2 as cv
 import os
 import re
 import numpy as np
@@ -204,3 +204,13 @@ def convert_rational_value(value) -> float:
     if value is not None and isinstance(value, tuple):
         value = value[0] / value[1]
     return value
+
+
+def create_transform(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
+    transform = cv.getRotationMatrix2D(center, angle, scale)
+    transform[:, 2] += translate
+    transform = np.vstack([transform, [0, 0, 1]])   # create 3x3 matrix
+    return transform
+
+def apply_transform(points, transform):
+    return np.dot([list(point) + [1] for point in points], transform.T)[:, :2]

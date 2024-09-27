@@ -1,14 +1,17 @@
 from dask.diagnostics import ProgressBar
 import json
 import logging
+import math
 import matplotlib as mpl
 from matplotlib import pyplot as plt
 import multiview_stitcher
-from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
+from multiscale_spatial_image import MultiscaleSpatialImage
+from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils, ngff_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
+from scipy.spatial.transform import Rotation
 from spatial_image import SpatialImage
 from tqdm import tqdm
 
@@ -52,7 +55,7 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, flatfield_quantile=None, invert_coordinates=False):
+def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False):
     tiles = []
     sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
@@ -76,9 +79,9 @@ def init_tiles(files, flatfield_quantile=None, invert_coordinates=False):
 
     for source, image in zip(sources, images):
         translation = convert_xyz_to_dict(get_value_units_micrometer(source.position))
-        if invert_coordinates:
+        if invert_x_coordinates:
             translation['x'] = -translation['x']
-            translation['y'] = -translation['y']
+        translation['y'] = -translation['y']
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
         if not translation.keys() == scale.keys():
@@ -90,6 +93,33 @@ def init_tiles(files, flatfield_quantile=None, invert_coordinates=False):
                 'data': image}
         tiles.append(tile)
     return tiles
+
+
+def fix_missing_rotation(tiles, source0):
+    positions = [np.array(list(tile['translation'].values())) for tile in tiles]
+    positions_centre = np.mean(positions, 0)
+    center_index = np.argmin([math.dist(position, positions_centre) for position in positions])
+    center_position = positions[center_index]
+    pairs = get_orthogonal_pairs_from_msims(tiles, source0)
+    angles = []
+    rotations = []
+    for pair in pairs:
+        vector = positions[pair[1]] - positions[pair[0]]
+        angle = np.rad2deg(np.arctan(vector[1] / vector[0]))
+        angles.append(angle)
+        rotation = angle
+        if rotation < -45:
+            rotation += 90
+        if rotation > 45:
+            rotation -= 90
+        rotations.append(rotation)
+    rotation = np.mean(rotations)
+    transform = create_transform(center=center_position, angle=rotation)
+    for tile in tiles:
+        keys = list(tile['translation'].keys())
+        position = np.array(list(tile['translation'].values()))
+        position = apply_transform([position], transform)[0]
+        tile['translation'] = {dim: value for dim, value in zip(keys, position)}
 
 
 def images_to_msims(tiles):
@@ -110,25 +140,29 @@ def images_to_msims(tiles):
     return msims
 
 
-def get_orthogonal_pairs_from_msims(msims):
+def get_orthogonal_pairs_from_msims(images, source0=None):
     """
     Get pairs of orthogonal neighbors from a list of msims.
     This assumes that the msims are placed on a regular grid.
     """
 
     # get positions (image origins) of msims to be registered
-    sim0 = msi_utils.get_sim_from_msim(msims[0])
-    spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-    size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-    origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
-                        for msim in msims])
+    if isinstance(images[0], MultiscaleSpatialImage):
+        sim0 = msi_utils.get_sim_from_msim(images[0])
+        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+        origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
+                            for msim in images])
+    else:
+        size = get_value_units_micrometer(source0.get_physical_size())
+        origins = np.array([(tile['translation']['x'], tile['translation']['y']) for tile in images])
     #threshold = [np.mean(np.diff(np.sort(origins[:, dimi]))) for dimi in range(len(spatial_dims))]
     threshold = np.array(size)
     threshold_half = threshold / 2
 
     # get pairs of neighboring msims
     pairs = []
-    for i, j in np.transpose(np.triu_indices(len(msims), 1)):
+    for i, j in np.transpose(np.triu_indices(len(images), 1)):
         relvec = abs(origins[i] - origins[j])
         if np.any(relvec < threshold_half) and np.all(relvec < threshold):
             pairs.append((i, j))
@@ -243,6 +277,7 @@ def register(sims, msims, reg_channel=None, reg_channel_index=None, filter_foreg
 def save_zarr(filename, image, source):
     #image.to_zarr(filename)    # gives attribute error (creates empty attr dictionary) in xarray.to_zarr
     #msi_utils.multiscale_spatial_image_to_zarr(msi_utils.get_msim_from_sim(image), filename)   # creates 'scaleX' keys
+    ##ngff_utils.sim_to_ngff_image(image, filename, source)
     if isinstance(image, SpatialImage):
         source.output_dimension_order = ''.join(image.dims)
     zarr = OmeZarr(filename)
@@ -273,7 +308,7 @@ def show_image(image, title='', cmap=None):
     plt.show()
 
 
-def run0():
+def run_simple():
     print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
@@ -284,12 +319,15 @@ def run0():
 
     #input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
-    #invert_coordinates = True
+    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/t.*/.*.ome.tif'
+    input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif'
+
+    #invert_x_coordinates = True
     #flatfield_quantile = 0.95
     #filter_foreground = True
     #use_orthogonal_pairs = True
 
-    invert_coordinates = False
+    invert_x_coordinates = False
     flatfield_quantile = None
     filter_foreground = False
     use_orthogonal_pairs = False
@@ -319,27 +357,29 @@ def run0():
         filenames = dir_regex(input)
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
     source0 = create_source(filenames[0])
-    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_coordinates=invert_coordinates)
+    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
+    # hack
+    fix_missing_rotation(tiles, source0)
 
     print('Converting tiles...')
     msims = images_to_msims(tiles)
     sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
 
     # before registration:
-    #print('Fusing original...')
-    #original_fused = fusion.fuse(
-    #    sims,
-    #    transform_key='stage_metadata'
-    #)
+    print('Fusing original...')
+    original_fused = fusion.fuse(
+        sims,
+        transform_key='stage_metadata'
+    )
 
     # plot the tile configuration
-    #print('Plotting tiles...')
-    #vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-    #                         view_labels=file_indices, view_labels_size=3,
-    #                         show_plot=False, output_filename=original_tiles_filename)
+    print('Plotting tiles...')
+    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+                             view_labels=file_indices, view_labels_size=3,
+                             show_plot=False, output_filename=original_tiles_filename)
 
-    #print('Saving fused image...')
-    #save_zarr(original_fused_filename, original_fused, source0)
+    print('Saving fused image...')
+    save_zarr(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
     mappings, registered_fused = register(sims, msims, reg_channel,
@@ -372,7 +412,7 @@ def run():
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     source0 = create_source(filenames[0])
-    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_coordinates=True)
+    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     msims = images_to_msims(tiles)
     sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
     mappings1, registered_fused1 = register(sims, msims, 0,
@@ -385,7 +425,7 @@ def run():
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_coordinates=True)
+    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     msims = images_to_msims(tiles)
     sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
     mappings2, registered_fused2 = register(sims, msims, 0,
@@ -421,5 +461,5 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    run_simple()
     print('Done!')

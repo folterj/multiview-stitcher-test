@@ -93,7 +93,7 @@ def redimension_data(data, old_order, new_order, **indices):
             index = order.index(o)
             dim_value = indices.get(o, 0)
             new_data = np.take(new_data, indices=dim_value, axis=index)
-            order = order.replace(o, '')
+            order = order[:index] + order[index + 1:]
     # add
     for o in new_order:
         if o not in order:
