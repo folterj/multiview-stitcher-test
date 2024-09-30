@@ -131,6 +131,30 @@ def normalise_values(image: np.ndarray, min_value: float, max_value: float) -> n
     return np.clip((image.astype(np.float32) - min_value) / (max_value - min_value), 0, 1)
 
 
+def norm_image_variance(image0):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    normimage = np.clip((image - np.mean(image)) / np.std(image), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
+
+
+def norm_image_quantiles(image0, quantile=0.99):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    min_value = np.quantile(image, 1 - quantile)
+    max_value = np.quantile(image, quantile)
+    normimage = np.clip((image - min_value) / (max_value - min_value), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
+
+
 def get_image_size_info(sizes_xyzct: list, pixel_nbytes: int, pixel_type: np.dtype, channels: list) -> str:
     image_size_info = 'XYZCT:'
     size = 0
