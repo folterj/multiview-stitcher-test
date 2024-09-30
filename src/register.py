@@ -1,4 +1,3 @@
-import tifffile
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -12,10 +11,11 @@ from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
-from scipy.spatial.transform import Rotation
 from spatial_image import SpatialImage
+import tifffile
 from tqdm import tqdm
 
+from src.OmeSource import get_resolution_from_pixel_size
 from src.OmeZarr import OmeZarr
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
@@ -280,7 +280,8 @@ def register(msims, msims_fuse, reg_channel=None, reg_channel_index=None, filter
     progress.close()
     mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
 
-    # TODO: copy transform key from registered msims to msims_fuse
+    for msim, mapping in zip(msims_fuse, mappings):
+        msi_utils.set_affine_transform(msim, mapping, transform_key='registered')
 
     print('Fusing...')
     fused_image = fusion.fuse(
@@ -298,7 +299,10 @@ def save_image(filename, image, source):
         source.output_dimension_order = ''.join(image.dims)
     zarr = OmeZarr(filename + '.ome.zarr')
     zarr.write(image.data, source)
-    tifffile.imwrite(filename + '.tiff', image)
+
+    resolution, resolution_unit = get_resolution_from_pixel_size(source.get_pixel_size())
+    tifffile.imwrite(filename + '.tiff', image, tile=(256, 256), compression='LZW',
+                     resolution=resolution, resolutionunit=resolution_unit)
 
 
 def convert_xyz_to_dict(xyz):

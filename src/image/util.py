@@ -227,6 +227,14 @@ def image_reshape(image: np.ndarray, target_size: tuple) -> np.ndarray:
     return image
 
 
+def resize_image(image, new_size):
+    if not isinstance(new_size, (tuple, list, np.ndarray)):
+        # use single value for width; apply aspect ratio
+        size = np.flip(image.shape[:2])
+        new_size = new_size, new_size * size[1] // size[0]
+    return cv.resize(image, new_size)
+
+
 def image_resize(image: np.ndarray, target_size0: tuple, dimension_order: str = 'yxc') -> np.ndarray:
     shape = image.shape
     x_index = dimension_order.index('x')
