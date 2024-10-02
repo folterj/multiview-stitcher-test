@@ -123,7 +123,7 @@ def fix_missing_rotation(tiles, source0):
         tile['translation'] = {dim: value for dim, value in zip(keys, position)}
 
 
-def normalise(tiles):
+def normalise_tiles(tiles):
     # normalise using global mean and stddev
     means = []
     stddevs = []
@@ -139,9 +139,27 @@ def normalise(tiles):
         tile['data'] = normimage
 
 
-def images_to_msims(tiles):
+def normalise(sims):
+    new_sims = []
+    # normalise using global mean and stddev
+    means = []
+    stddevs = []
+    for sim in sims:
+        means.append(np.mean(sim.data))
+        stddevs.append(np.std(sim.data))
+    mean = np.mean(means)
+    stddev = np.mean(stddevs)
+    # normalise all images
+    for sim in sims:
+        new_sim = sim.copy()
+        new_sim.data = np.clip((sim.data - mean) / stddev, 0, 1).astype(np.float32)
+        new_sims.append(new_sim)
+    return new_sims
+
+
+def images_to_sims(tiles):
     # build input for stitching
-    msims = []
+    sims = []
     for tile in tqdm(tiles):
         # input data (can be any numpy compatible array: numpy, dask, cupy, etc.)
         channel_labels = [channel.get('label', '') for channel in tile['channels']]
@@ -153,8 +171,8 @@ def images_to_msims(tiles):
             transform_key="stage_metadata",
             c_coords=channel_labels
         )
-        msims.append(msi_utils.get_msim_from_sim(sim))
-    return msims
+        sims.append(sim)
+    return sims
 
 
 def get_orthogonal_pairs_from_msims(images, source0=None):
@@ -187,14 +205,23 @@ def get_orthogonal_pairs_from_msims(images, source0=None):
     return pairs
 
 
-def register(msims, msims_fuse, reg_channel=None, reg_channel_index=None, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False):
+def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=False,
+             use_orthogonal_pairs=False, use_rotation=False, convert_to_channels=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
 
-    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
-    spatial_dims = si_utils.get_spatial_dims_from_sim(sims[0])
+    # normalisation
+    sims = normalise(sims0)
+
+    # convert to multichannel images
+    if convert_to_channels:
+        n = len(sims0)
+        sims0 = [sim.pad(c=(channeli, n - 1 - channeli), constant_values=0)
+                  for channeli, sim in enumerate(sims0)]
+
+    msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
 
     if filter_foreground:
         print('Filtering foreground tiles...')
@@ -202,14 +229,15 @@ def register(msims, msims_fuse, reg_channel=None, reg_channel_index=None, filter
         threshold = np.median(tile_vars)
         foregrounds = (tile_vars > threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
-        not_foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if not foreground]
         print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
-        #for msim in not_foreground_msims:
-        #    transform = msi_utils.get_transform_from_msim(msim, 'stage_metadata')
-        #    msi_utils.set_affine_transform(msim, transform, 'translation_registered')
-        for msim in not_foreground_msims:
+        for msim0, msim in zip (msims0, msims):
+            msi_utils.set_affine_transform(
+                msim0,
+                param_utils.identity_transform(ndim=2, t_coords=[0]),
+                transform_key='registered',
+                base_transform_key='stage_metadata')
             msi_utils.set_affine_transform(
                 msim,
                 param_utils.identity_transform(ndim=2, t_coords=[0]),
@@ -280,15 +308,15 @@ def register(msims, msims_fuse, reg_channel=None, reg_channel_index=None, filter
     progress.close()
     mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
 
-    for msim, mapping in zip(msims_fuse, mappings):
+    for msim, mapping in zip(msims0, mappings):
         msi_utils.set_affine_transform(msim, mapping, transform_key='registered')
 
     print('Fusing...')
     fused_image = fusion.fuse(
-        [msi_utils.get_sim_from_msim(msim) for msim in msims_fuse],
+        [msi_utils.get_sim_from_msim(msim) for msim in msims0],
         transform_key="registered"
     )
-    return mappings_dict, fused_image
+    return mappings_dict, msims0, fused_image
 
 
 def save_image(filename, image, source):
@@ -384,35 +412,30 @@ def run_simple():
     fix_missing_rotation(tiles, source0)
 
     print('Converting tiles...')
-    msims0 = images_to_msims(tiles)
-
-    # normalisation
-    normalise(tiles)
-
-    msims = images_to_msims(tiles)
+    sims = images_to_sims(tiles)
 
     # before registration:
-    #sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
-    #print('Fusing original...')
-    #original_fused = fusion.fuse(
-    #    sims,
-    #    transform_key='stage_metadata'
-    #)
+    print('Fusing original...')
+    original_fused = fusion.fuse(
+        sims,
+        transform_key='stage_metadata'
+    )
 
     # plot the tile configuration
     print('Plotting tiles...')
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
     vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=original_tiles_filename)
 
-    #print('Saving fused image...')
-    #save_image(original_fused_filename, original_fused, source0)
+    print('Saving fused image...')
+    save_image(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
-    mappings, registered_fused = register(msims, msims0, reg_channel,
-                                          filter_foreground=filter_foreground,
-                                          use_orthogonal_pairs=use_orthogonal_pairs,
-                                          use_rotation=use_rotation)
+    mappings, msims, registered_fused = register(sims, reg_channel,
+                                                 filter_foreground=filter_foreground,
+                                                 use_orthogonal_pairs=use_orthogonal_pairs,
+                                                 use_rotation=use_rotation)
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
         json.dump(mappings2, file, indent=4)
@@ -434,41 +457,40 @@ def run():
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     source0 = create_source(filenames[0])
-    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    msims = images_to_msims(tiles)
-    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
-    mappings1, registered_fused1 = register(msims, msims, 0,
-                                            filter_foreground=True,
-                                            use_orthogonal_pairs=True,
-                                            use_rotation=False)
+    tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
+    sims1 = images_to_sims(tiles1)
+    mappings1, msims1, registered_fused1 = register(sims1, 0,
+                                                    filter_foreground=True,
+                                                    use_orthogonal_pairs=True,
+                                                    use_rotation=False)
 
-    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
+    input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    tiles = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    msims = images_to_msims(tiles)
-    mappings2, registered_fused2 = register(msims, msims, 0,
-                                            filter_foreground=True,
-                                            use_orthogonal_pairs=True,
-                                            use_rotation=False)
+    tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
+    sims2 = images_to_sims(tiles2)
+    mappings2, msims2, registered_fused2 = register(sims2, 0,
+                                                    filter_foreground=True,
+                                                    use_orthogonal_pairs=True,
+                                                    use_rotation=False)
 
     sims = [registered_fused1, registered_fused2]
-    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
     # set dummy position
-    for msim in msims:
-        msi_utils.set_affine_transform(msim,
-                                       param_utils.identity_transform(ndim=2, t_coords=[0]),
-                                       transform_key='stage_metadata')
-    mappings, registered_fused = register(msims, msims, 0,
-                                          filter_foreground=False,
-                                          use_orthogonal_pairs=False,
-                                          use_rotation=False)
+    for sim in sims:
+        si_utils.set_sim_affine(sim,
+                                param_utils.identity_transform(ndim=2, t_coords=[0]),
+                                transform_key='stage_metadata')
+    mappings, msims, registered_fused = register(sims, 0,
+                                                 filter_foreground=False,
+                                                 use_orthogonal_pairs=False,
+                                                 use_rotation=False,
+                                                 convert_to_channels=True)
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
     registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')
@@ -485,5 +507,5 @@ def run():
 
 
 if __name__ == '__main__':
-    run_simple()
+    run()
     print('Done!')
