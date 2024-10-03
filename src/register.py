@@ -14,6 +14,7 @@ import re
 from spatial_image import SpatialImage
 import tifffile
 from tqdm import tqdm
+import xarray as xr
 
 from src.OmeSource import get_resolution_from_pixel_size
 from src.OmeZarr import OmeZarr
@@ -206,7 +207,7 @@ def get_orthogonal_pairs_from_msims(images, source0=None):
 
 
 def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False, convert_to_channels=False):
+             use_orthogonal_pairs=False, use_rotation=False, fuse_to_channel_names=[]):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
@@ -215,10 +216,10 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
     sims = normalise(sims0)
 
     # convert to multichannel images
-    if convert_to_channels:
-        n = len(sims0)
-        sims0 = [sim.pad(c=(channeli, n - 1 - channeli), constant_values=0)
-                  for channeli, sim in enumerate(sims0)]
+    #if convert_to_channels:
+    #    n = len(sims0)
+    #    sims0 = [sim.pad(c=(channeli, n - 1 - channeli), constant_values=0)
+    #              for channeli, sim in enumerate(sims0)]
 
     msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
@@ -312,19 +313,35 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
         msi_utils.set_affine_transform(msim, mapping, transform_key='registered')
 
     print('Fusing...')
-    fused_image = fusion.fuse(
-        [msi_utils.get_sim_from_msim(msim) for msim in msims0],
-        transform_key="registered"
-    )
+    # convert to multichannel images
+    if len(fuse_to_channel_names) > 0:
+        sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
+        output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
+        channel_sims = [fusion.fuse(
+            [sim],
+            transform_key="registered",
+            output_stack_properties=output_stack_properties
+        ) for sim in sims0]
+        channel_sims = [sim.assign_coords({'c': [fuse_to_channel_names[simi]]})
+                        for simi, sim in enumerate(channel_sims)]
+        fused_image = xr.combine_by_coords([sim.rename(None) for sim in channel_sims],
+                                           combine_attrs='override')
+    else:
+        fused_image = fusion.fuse(
+            [msi_utils.get_sim_from_msim(msim) for msim in msims0],
+            transform_key="registered"
+        )
     return mappings_dict, msims0, fused_image
 
 
-def save_image(filename, image, source):
+def save_image(filename, image, source, channels=None):
     #image.to_zarr(filename)    # gives attribute error (creates empty attr dictionary) in xarray.to_zarr
     #msi_utils.multiscale_spatial_image_to_zarr(msi_utils.get_msim_from_sim(image), filename)   # creates 'scaleX' keys
     ##ngff_utils.sim_to_ngff_image(image, filename, source)
-    if isinstance(image, SpatialImage):
+    if isinstance(image, xr.DataArray):
         source.output_dimension_order = ''.join(image.dims)
+    if channels is not None:
+        source.channels = channels
     zarr = OmeZarr(filename + '.ome.zarr')
     zarr.write(image.data, source)
 
@@ -457,11 +474,16 @@ def run():
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    channel_names = ['Reflection', 'Fluorescence']
+    channels = [{'name': 'Reflection', 'color': (1, 1, 1)},
+                {'name': 'Fluorescence', 'color': (0, 1, 0)}]
+
     input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     source0 = create_source(filenames[0])
+    source0.position = []
     tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims1 = images_to_sims(tiles1)
     mappings1, msims1, registered_fused1 = register(sims1, 0,
@@ -490,7 +512,7 @@ def run():
                                                  filter_foreground=False,
                                                  use_orthogonal_pairs=False,
                                                  use_rotation=False,
-                                                 convert_to_channels=True)
+                                                 fuse_to_channel_names=channel_names)
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
     registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')
@@ -502,8 +524,7 @@ def run():
                              show_plot=False, output_filename=registered_tiles_filename)
 
     print('Saving fused image...')
-    save_image(registered_fused_filename, registered_fused, source0)
-    # TODO: save channels to zarr using mappings offset
+    save_image(registered_fused_filename, registered_fused, source0, channels=channels)
 
 
 if __name__ == '__main__':
