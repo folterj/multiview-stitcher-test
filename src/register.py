@@ -123,22 +123,6 @@ def fix_missing_rotation(tiles, source0):
         tile['translation'] = {dim: value for dim, value in zip(keys, position)}
 
 
-def normalise_tiles(tiles):
-    # normalise using global mean and stddev
-    means = []
-    stddevs = []
-    for tile in tiles:
-        data = tile['data']
-        means.append(np.mean(data))
-        stddevs.append(np.std(data))
-    mean = np.mean(means)
-    stddev = np.mean(stddevs)
-    # normalise images
-    for tile in tiles:
-        normimage = np.clip((tile['data'] - mean) / stddev, 0, 1).astype(np.float32)
-        tile['data'] = normimage
-
-
 def normalise_global(sims):
     new_sims = []
     # normalise using global mean and stddev
@@ -153,6 +137,16 @@ def normalise_global(sims):
     for sim in sims:
         new_sim = sim.copy()
         new_sim.data = np.clip((sim.data - mean) / stddev, 0, 1).astype(np.float32)
+        new_sims.append(new_sim)
+    return new_sims
+
+
+def normalise(sims):
+    new_sims = []
+    # normalise all images individually
+    for sim in sims:
+        new_sim = sim.copy()
+        new_sim.data = np.clip((sim.data - np.mean(sim.data)) / np.std(sim.data), 0, 1).astype(np.float32)
         new_sims.append(new_sim)
     return new_sims
 
@@ -213,7 +207,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
 
     # normalisation
     if len(channel_names) > 0:
-        sims = norm_image_variance([sim for sim in sims0])
+        sims = normalise(sims0)
     else:
         sims = normalise_global(sims0)
 
