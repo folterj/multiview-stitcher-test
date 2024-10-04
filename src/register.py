@@ -139,7 +139,7 @@ def normalise_tiles(tiles):
         tile['data'] = normimage
 
 
-def normalise(sims):
+def normalise_global(sims):
     new_sims = []
     # normalise using global mean and stddev
     means = []
@@ -212,7 +212,10 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
         reg_channel = None
 
     # normalisation
-    sims = normalise(sims0)
+    if len(channel_names) > 0:
+        sims = norm_image_variance([sim for sim in sims0])
+    else:
+        sims = normalise_global(sims0)
 
     msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
