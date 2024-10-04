@@ -12,6 +12,7 @@ dependencies:
  - tifffile>=2023.9.26
  - zarr
  - ome-zarr
+ - ngff_zarr
  - matplotlib
  - tqdm
  - pip

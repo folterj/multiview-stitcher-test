@@ -1,3 +1,4 @@
+import ngff_zarr
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -11,13 +12,11 @@ from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
-from spatial_image import SpatialImage
 import tifffile
 from tqdm import tqdm
 import xarray as xr
 
 from src.OmeSource import get_resolution_from_pixel_size
-from src.OmeZarr import OmeZarr
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
 from src.image.util import *
@@ -207,19 +206,13 @@ def get_orthogonal_pairs_from_msims(images, source0=None):
 
 
 def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False, fuse_to_channel_names=[]):
+             use_orthogonal_pairs=False, use_rotation=False, channel_names=[]):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
 
     # normalisation
     sims = normalise(sims0)
-
-    # convert to multichannel images
-    #if convert_to_channels:
-    #    n = len(sims0)
-    #    sims0 = [sim.pad(c=(channeli, n - 1 - channeli), constant_values=0)
-    #              for channeli, sim in enumerate(sims0)]
 
     msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
@@ -314,36 +307,33 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
 
     print('Fusing...')
     # convert to multichannel images
-    if len(fuse_to_channel_names) > 0:
-        sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
+    sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
+    if len(channel_names) > 0:
         output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
         channel_sims = [fusion.fuse(
             [sim],
             transform_key="registered",
             output_stack_properties=output_stack_properties
         ) for sim in sims0]
-        channel_sims = [sim.assign_coords({'c': [fuse_to_channel_names[simi]]})
-                        for simi, sim in enumerate(channel_sims)]
+        channel_sims = [sim.assign_coords({'c': [channel_names[simi]]}) for simi, sim in enumerate(channel_sims)]
         fused_image = xr.combine_by_coords([sim.rename(None) for sim in channel_sims],
                                            combine_attrs='override')
     else:
         fused_image = fusion.fuse(
-            [msi_utils.get_sim_from_msim(msim) for msim in msims0],
+            sims0,
             transform_key="registered"
         )
     return mappings_dict, msims0, fused_image
 
 
 def save_image(filename, image, source, channels=None):
-    #image.to_zarr(filename)    # gives attribute error (creates empty attr dictionary) in xarray.to_zarr
-    #msi_utils.multiscale_spatial_image_to_zarr(msi_utils.get_msim_from_sim(image), filename)   # creates 'scaleX' keys
-    ##ngff_utils.sim_to_ngff_image(image, filename, source)
+    ngffim = ngff_utils.sim_to_ngff_image(image, transform_key='registered')
+    ngffmim = ngff_zarr.to_multiscales(ngffim)
+    ngff_zarr.to_ngff_zarr(filename + '.zarr', ngffmim)
     if isinstance(image, xr.DataArray):
         source.output_dimension_order = ''.join(image.dims)
     if channels is not None:
         source.channels = channels
-    zarr = OmeZarr(filename + '.ome.zarr')
-    zarr.write(image.data, source)
 
     resolution, resolution_unit = get_resolution_from_pixel_size(source.get_pixel_size())
     tifffile.imwrite(filename + '.tiff', image, tile=(256, 256), compression='LZW',
@@ -478,9 +468,9 @@ def run():
     channels = [{'name': 'Reflection', 'color': (1, 1, 1)},
                 {'name': 'Fluorescence', 'color': (0, 1, 0)}]
 
-    input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     source0 = create_source(filenames[0])
     source0.position = []
@@ -491,9 +481,9 @@ def run():
                                                     use_orthogonal_pairs=True,
                                                     use_rotation=False)
 
-    input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
     tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims2 = images_to_sims(tiles2)
@@ -512,7 +502,7 @@ def run():
                                                  filter_foreground=False,
                                                  use_orthogonal_pairs=False,
                                                  use_rotation=False,
-                                                 fuse_to_channel_names=channel_names)
+                                                 channel_names=channel_names)
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
     registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')
