@@ -199,18 +199,21 @@ def get_orthogonal_pairs_from_msims(images, source0=None):
     return pairs
 
 
-def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=False,
+def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, channel_names=[]):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
 
-    # normalisation
     is_channel_overlay = (len(channel_names) > 0)
-    if is_channel_overlay:
-        sims = normalise(sims0)
+    # normalisation
+    if normalisation:
+        if is_channel_overlay:
+            sims = normalise(sims0)
+        else:
+            sims = normalise_global(sims0)
     else:
-        sims = normalise_global(sims0)
+        sims = sims0
 
     msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
@@ -492,7 +495,7 @@ def run():
     tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims1 = images_to_sims(tiles1)
     mappings1, score, msims1, registered_fused1 = (
-        register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
+        register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')
 
     print('Plotting tiles...')
@@ -509,7 +512,7 @@ def run():
     tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims2 = images_to_sims(tiles2)
     mappings2, score, msims2, registered_fused2 = (
-        register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
+        register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')
 
     print('Plotting tiles...')
@@ -526,7 +529,7 @@ def run():
                                 param_utils.identity_transform(ndim=2, t_coords=[0]),
                                 transform_key='stage_metadata')
     mappings, score, msims, registered_fused =(
-        register(sims, 0, filter_foreground=False, use_orthogonal_pairs=False, use_rotation=False,
+        register(sims, 0, normalisation=True, filter_foreground=False, use_orthogonal_pairs=False,
                  channel_names=channel_names))
     print(f'Score: {score:.3f}')
 
