@@ -206,7 +206,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
         reg_channel = None
 
     # normalisation
-    if len(channel_names) > 0:
+    is_channel_overlay = (len(channel_names) > 0)
+    if is_channel_overlay:
         sims = normalise(sims0)
     else:
         sims = normalise_global(sims0)
@@ -284,20 +285,45 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
             )
             mappings = mappings2
         else:
+            if is_channel_overlay:
+                pairwise_reg_func = registration.registration_ANTsPy
+            else:
+                pairwise_reg_func = registration.phase_correlation_registration
             mappings = registration.register(
-               register_msims,
-               reg_channel=reg_channel,
-               reg_channel_index=reg_channel_index,
-               transform_key="stage_metadata",
-               new_transform_key="registered",
-               pairs=pairs,
-               pre_registration_pruning_method=None,
-               plot_summary=True
+                register_msims,
+                reg_channel=reg_channel,
+                reg_channel_index=reg_channel_index,
+                transform_key="stage_metadata",
+                new_transform_key="registered",
+                pairs=pairs,
+                pre_registration_pruning_method=None,
+                pairwise_reg_func=pairwise_reg_func,
+                plot_summary=True
             )
 
     progress.update()
     progress.close()
-    mappings_dict = {int(index): mapping.data.tolist() for index, mapping in zip(indices, mappings)}
+    mappings_dict = {int(index): mapping.data[0].tolist() for index, mapping in zip(indices, mappings)}
+    distances = [np.linalg.norm(apply_transform([(0, 0)], np.array(mapping))[0]) for mapping in mappings_dict.values()]
+
+    if is_channel_overlay:
+        sim0 = sims0[0]
+        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+        norm_distance = np.mean(distances) / np.linalg.norm(size)
+        score = 1 - min(norm_distance, 1)
+    else:
+        # debug: show this score always
+        sim0 = sims0[0]
+        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+        norm_distance = np.mean(distances) / np.linalg.norm(size)
+        score = 1 - min(norm_distance, 1)
+        print('Score0:', score)
+
+        # Coefficient of variation
+        cv = np.std(distances) / np.mean(distances)
+        score = 1 - min(cv / 10, 1)
 
     for msim, mapping in zip(msims0, mappings):
         msi_utils.set_affine_transform(msim, mapping, transform_key='registered')
@@ -320,7 +346,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
             sims0,
             transform_key="registered"
         )
-    return mappings_dict, msims0, fused_image
+    return mappings_dict, score, msims0, fused_image
 
 
 def save_image(filename, image, source, channels=None):
@@ -436,10 +462,10 @@ def run_simple():
     save_image(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
-    mappings, msims, registered_fused = register(sims, reg_channel,
-                                                 filter_foreground=filter_foreground,
-                                                 use_orthogonal_pairs=use_orthogonal_pairs,
-                                                 use_rotation=use_rotation)
+    mappings, score, msims, registered_fused = (
+        register(sims, reg_channel, filter_foreground=filter_foreground,
+                 use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation))
+    print(f'Score: {score:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
         json.dump(mappings2, file, indent=4)
@@ -473,10 +499,9 @@ def run():
     source0.position = []
     tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims1 = images_to_sims(tiles1)
-    mappings1, msims1, registered_fused1 = register(sims1, 0,
-                                                    filter_foreground=True,
-                                                    use_orthogonal_pairs=True,
-                                                    use_rotation=False)
+    mappings1, score, msims1, registered_fused1 = (
+        register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
+    print(f'Score: {score:.3f}')
 
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
@@ -484,10 +509,9 @@ def run():
     filenames = dir_regex(input)
     tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims2 = images_to_sims(tiles2)
-    mappings2, msims2, registered_fused2 = register(sims2, 0,
-                                                    filter_foreground=True,
-                                                    use_orthogonal_pairs=True,
-                                                    use_rotation=False)
+    mappings2, score, msims2, registered_fused2 = (
+        register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
+    print(f'Score: {score:.3f}')
 
     sims = [registered_fused1, registered_fused2]
     # set dummy position
@@ -495,11 +519,11 @@ def run():
         si_utils.set_sim_affine(sim,
                                 param_utils.identity_transform(ndim=2, t_coords=[0]),
                                 transform_key='stage_metadata')
-    mappings, msims, registered_fused = register(sims, 0,
-                                                 filter_foreground=False,
-                                                 use_orthogonal_pairs=False,
-                                                 use_rotation=False,
-                                                 channel_names=channel_names)
+    mappings, score, msims, registered_fused =(
+        register(sims, 0, filter_foreground=False, use_orthogonal_pairs=False, use_rotation=False,
+                 channel_names=channel_names))
+    print(f'Score: {score:.3f}')
+
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
     registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')

@@ -211,12 +211,23 @@ def convert_rational_value(value) -> float:
 def create_transform(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
     transform = cv.getRotationMatrix2D(center, angle, scale)
     transform[:, 2] += translate
-    transform = np.vstack([transform, [0, 0, 1]])   # create 3x3 matrix
+    if len(transform) == 2:
+        transform = np.vstack([transform, [0, 0, 1]])   # create 3x3 matrix
     return transform
 
 
 def apply_transform(points, transform):
-    return np.dot([list(point) + [1] for point in points], transform.T)[:, :2]
+    new_points = []
+    point_len = 0
+    for point in points:
+        point_len = len(point)
+        if point_len == 2:
+            point = list(point) + [1]
+        new_point = np.dot(point, np.transpose(transform))
+        new_points.append(new_point)
+    if point_len == 2:
+        new_points = np.array(new_points)[:, :2].tolist()
+    return new_points
 
 
 def create_tiff_metadata(metadata, is_ome=False):
