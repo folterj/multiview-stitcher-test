@@ -310,17 +310,9 @@ def register(sims0, reg_channel=None, reg_channel_index=None, filter_foreground=
         sim0 = sims0[0]
         spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
         size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-        norm_distance = np.mean(distances) / np.linalg.norm(size)
-        score = 1 - min(norm_distance, 1)
+        norm_distance = np.sum(distances) / np.linalg.norm(size)
+        score = 1 - min(math.sqrt(norm_distance), 1)
     else:
-        # debug: show this score always
-        sim0 = sims0[0]
-        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-        norm_distance = np.mean(distances) / np.linalg.norm(size)
-        score = 1 - min(norm_distance, 1)
-        print('Score0:', score)
-
         # Coefficient of variation
         cv = np.std(distances) / np.mean(distances)
         score = 1 - min(cv / 10, 1)
@@ -503,6 +495,13 @@ def run():
         register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
     print(f'Score: {score:.3f}')
 
+    print('Plotting tiles...')
+    vis_utils.plot_positions(msims1, transform_key='registered', use_positional_colors=False,
+                             show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered1.png'))
+
+    print('Saving fused image...')
+    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, source0)
+
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
@@ -512,6 +511,13 @@ def run():
     mappings2, score, msims2, registered_fused2 = (
         register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True, use_rotation=False))
     print(f'Score: {score:.3f}')
+
+    print('Plotting tiles...')
+    vis_utils.plot_positions(msims2, transform_key='registered', use_positional_colors=False,
+                             show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered2.png'))
+
+    print('Saving fused image...')
+    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, source0)
 
     sims = [registered_fused1, registered_fused2]
     # set dummy position
@@ -526,16 +532,13 @@ def run():
 
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
-    registered_tiles_filename = os.path.join(output_dir, 'overlay_registered.png')
-    registered_fused_filename = os.path.join(output_dir, 'registered')
 
-    # plot the tile configuration after registration
-    print('Plotting tiles...')
+    print('Plotting overlay...')
     vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
-                             show_plot=False, output_filename=registered_tiles_filename)
+                             show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
     print('Saving fused image...')
-    save_image(registered_fused_filename, registered_fused, source0, channels=channels)
+    save_image(os.path.join(output_dir, 'registered'), registered_fused, source0, channels=channels)
 
 
 if __name__ == '__main__':
