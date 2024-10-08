@@ -221,7 +221,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     if filter_foreground:
         print('Filtering foreground tiles...')
         tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
-        threshold = np.median(tile_vars)
+        threshold = np.median(tile_vars)    # using median by definition 50% of the tiles
         foregrounds = (tile_vars > threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
         print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
@@ -320,8 +320,11 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         cv = np.std(distances) / np.mean(distances)
         score = 1 - min(cv / 10, 1)
 
-    for msim, mapping in zip(msims0, mappings):
-        msi_utils.set_affine_transform(msim, mapping, transform_key='registered')
+    for msim, msim0 in zip(msims, msims0):
+        msi_utils.set_affine_transform(
+            msim0,
+            msi_utils.get_transform_from_msim(msim, transform_key='registered'),
+            transform_key='registered')
 
     print('Fusing...')
     # convert to multichannel images
@@ -389,22 +392,25 @@ def run_simple():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
 
     #input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
 
     #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/t.*/.*.ome.tif'
-    input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif'
+    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif'
 
-    #invert_x_coordinates = True
-    #flatfield_quantile = 0.95
-    #filter_foreground = True
+    invert_x_coordinates = True
+    flatfield_quantile = 0.95
+    normalisation = False
+    filter_foreground = True
+    use_orthogonal_pairs = True
+
+    #invert_x_coordinates = False
+    #flatfield_quantile = None
+    #filter_foreground = False
     #use_orthogonal_pairs = True
 
-    invert_x_coordinates = False
-    flatfield_quantile = None
-    filter_foreground = False
-    use_orthogonal_pairs = True
+    do_fix_missing_rotation = False
     use_rotation = False
 
     reg_channel = 0
@@ -433,8 +439,9 @@ def run_simple():
     source0 = create_source(filenames[0])
     tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
 
-    # hack to fix rotation
-    fix_missing_rotation(tiles, source0)
+    if do_fix_missing_rotation:
+        # hack to fix rotation
+        fix_missing_rotation(tiles, source0)
 
     print('Converting tiles...')
     sims = images_to_sims(tiles)
@@ -447,18 +454,18 @@ def run_simple():
     )
 
     # plot the tile configuration
-    print('Plotting tiles...')
-    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-                             view_labels=file_indices, view_labels_size=3,
-                             show_plot=False, output_filename=original_tiles_filename)
+    #print('Plotting tiles...')
+    #msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
+    #vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+    #                         view_labels=file_indices, view_labels_size=3,
+    #                         show_plot=False, output_filename=original_tiles_filename)
 
-    print('Saving fused image...')
-    save_image(original_fused_filename, original_fused, source0)
+    #print('Saving fused image...')
+    #save_image(original_fused_filename, original_fused, source0)
     #show_image(original_fused.data[0, 0, ...])
 
     mappings, score, msims, registered_fused = (
-        register(sims, reg_channel, filter_foreground=filter_foreground,
+        register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                  use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation))
     print(f'Score: {score:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
@@ -545,5 +552,6 @@ def run():
 
 
 if __name__ == '__main__':
+    #run_simple()
     run()
     print('Done!')
