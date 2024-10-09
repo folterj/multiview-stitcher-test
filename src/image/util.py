@@ -1,5 +1,4 @@
 import cv2 as cv
-from numcodecs import register_codec
 import numpy as np
 import PIL.Image
 from PIL.ExifTags import TAGS
@@ -8,9 +7,12 @@ from scipy.ndimage import gaussian_filter
 from skimage.transform import downscale_local_mean
 from tifffile import TiffFile
 try:
+    import matplotlib as mpl
+    #mpl.rcParams['backend'] = 'svg'
+    mpl.rcParams['figure.dpi'] = 300
     import matplotlib.pyplot as plt
-except:
-    print('matplotlib not installed')
+except Exception as e:
+    print(f'matplotlib import error:\n{e}')
 
 from src.util import *
 

@@ -3,8 +3,6 @@ from dask.diagnostics import ProgressBar
 import json
 import logging
 import math
-import matplotlib as mpl
-from matplotlib import pyplot as plt
 import multiview_stitcher
 from multiscale_spatial_image import MultiscaleSpatialImage
 from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils, ngff_utils
@@ -19,11 +17,10 @@ import xarray as xr
 from src.OmeSource import get_resolution_from_pixel_size
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
+from src.image.ome_tiff_helper import save_ome_tiff
+from src.image.ome_zarr_helper import save_ome_zarr
 from src.image.util import *
 from src.util import *
-
-
-mpl.rcParams['figure.dpi'] = 300
 
 
 def create_example_tiles():
@@ -347,23 +344,35 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     return mappings_dict, score, msims0, fused_image
 
 
-def save_image(filename, image, source, channels=None):
-    ngffim = ngff_utils.sim_to_ngff_image(image, transform_key='registered')
-    ngffmim = ngff_zarr.to_multiscales(ngffim)
-    ngff_zarr.to_ngff_zarr(filename + '.zarr', ngffmim)
-    if isinstance(image, xr.DataArray):
-        source.output_dimension_order = ''.join(image.dims)
-    if channels is not None:
-        source.channels = channels
+def save_image(filename, data, npyramid_add=4, pyramid_downsample=2):
+    sdims = si_utils.get_spatial_dims_from_sim(data)
+    nsdims = si_utils.get_nonspatial_dims_from_sim(data)
 
-    resolution, resolution_unit = get_resolution_from_pixel_size(source.get_pixel_size())
-    tifffile.imwrite(filename + '.tiff', image, tile=(256, 256), compression='LZW',
-                     resolution=resolution, resolutionunit=resolution_unit)
+    origin = si_utils.get_origin_from_sim(data)
+    transform_key = 'registered'
+    transform = si_utils.get_affine_from_sim(data, transform_key)
+    for nsdim in nsdims:
+        if nsdim in transform.dims:
+            transform = transform.sel(
+                {
+                    nsdim: transform.coords[nsdim][0]
+                    for nsdim in transform.dims
+                }
+            )
+    transform = np.array(transform)
+    transform_translation = param_utils.translation_from_affine(transform)
+    for isdim, sdim in enumerate(sdims):
+        origin[sdim] += transform_translation[isdim]
 
+    axes = ''.join(data.dims)
+    pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
+    position = [origin[dim] for dim in sdims]
+    channels = [{'name': c} for c in data.c.data]
 
-def convert_xyz_to_dict(xyz):
-    dct = {dim: value for dim, value in zip('xyz', xyz)}
-    return dct
+    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, position, channels,
+                  npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
+    save_ome_zarr(filename + '.ome.zarr', data.data, pixel_size, position, channels,
+                  npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
 
 
 def dir_regex(pattern):
@@ -372,17 +381,6 @@ def dir_regex(pattern):
     files = [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
     files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
     return files_sorted
-
-
-def show_image(image, title='', cmap=None):
-    nchannels = image.shape[2] if len(image.shape) > 2 else 1
-    if cmap is None:
-        cmap = 'gray' if nchannels == 1 else None
-    plt.imshow(image, cmap=cmap)
-    if title != '':
-        plt.title(title)
-    plt.tight_layout()
-    plt.show()
 
 
 def run_simple():
@@ -493,9 +491,9 @@ def run():
     channels = [{'name': 'Reflection', 'color': (1, 1, 1)},
                 {'name': 'Fluorescence', 'color': (0, 1, 0)}]
 
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     source0 = create_source(filenames[0])
     source0.position = []
@@ -512,9 +510,9 @@ def run():
     print('Saving fused image...')
     save_image(os.path.join(output_dir, 'registered1'), registered_fused1, source0)
 
-    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
+    input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
     tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims2 = images_to_sims(tiles2)
@@ -548,7 +546,7 @@ def run():
                              show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered'), registered_fused, source0, channels=channels)
+    save_image(os.path.join(output_dir, 'registered'), registered_fused)
 
 
 if __name__ == '__main__':
