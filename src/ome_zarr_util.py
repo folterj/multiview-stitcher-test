@@ -1,4 +1,7 @@
+import numpy as np
+
 from src.image.color_conversion import *
+from src.image.util import get_image_quantile
 
 
 def create_axes_metadata(dimension_order):
@@ -76,6 +79,50 @@ def create_channel_metadata(source, ome_version):
         'channels': omezarr_channels,
     }
     return metadata
+
+
+def create_channel_ome_metadata(data, dimension_order, channel_metadata, ome_version):
+    if 'c' in dimension_order:
+        nchannels = data.shape[dimension_order.index('c')]
+    else:
+        nchannels = 1
+    if len(channel_metadata) < nchannels == 3:
+        labels = ['Red', 'Green', 'Blue']
+        colors = [(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)]
+        channel_metadata = [{'label': label, 'color': color} for label, color in zip(labels, colors)]
+
+    omezarr_channels = []
+    for channeli, channel0 in enumerate(channel_metadata):
+        channel = channel0.copy()
+        color = channel.get('color', (1, 1, 1, 1))
+        channel['color'] = rgba_to_hexrgb(color)
+        if 'window' not in channel:
+            channel['window'] = get_channel_window(data, dimension_order, channeli)
+        omezarr_channels.append(channel)
+
+    metadata = {
+        'version': ome_version,
+        'channels': omezarr_channels,
+    }
+    return metadata
+
+
+def get_channel_window(data, dimension_order, channeli):
+    min_quantile = 0.001
+    max_quantile = 0.999
+
+    if data.dtype.kind == 'f':
+        #info = np.finfo(dtype)
+        start, end = 0, 1
+    else:
+        info = np.iinfo(data.dtype)
+        start, end = info.min, info.max
+
+    if 'c' in dimension_order:
+        data = np.take(data, channeli, axis=dimension_order.index('c'))
+    min, max = get_image_quantile(data, min_quantile), get_image_quantile(data, max_quantile)
+    window = {'start': start, 'end': end, 'min': min, 'max': max}
+    return window
 
 
 def scale_dimensions_xy(shape0, dimension_order, scale):

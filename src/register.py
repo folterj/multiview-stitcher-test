@@ -1,16 +1,13 @@
-import ngff_zarr
 from dask.diagnostics import ProgressBar
 import json
 import logging
 import math
 import multiview_stitcher
-from multiscale_spatial_image import MultiscaleSpatialImage
-from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils, ngff_utils
+from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
-import tifffile
 from tqdm import tqdm
 import xarray as xr
 
@@ -166,22 +163,18 @@ def images_to_sims(tiles):
     return sims
 
 
-def get_orthogonal_pairs_from_msims(images, source0=None):
+def get_orthogonal_pairs_from_msims(images):
     """
     Get pairs of orthogonal neighbors from a list of msims.
     This assumes that the msims are placed on a regular grid.
     """
 
     # get positions (image origins) of msims to be registered
-    if isinstance(images[0], MultiscaleSpatialImage):
-        sim0 = msi_utils.get_sim_from_msim(images[0])
-        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-        origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
-                            for msim in images])
-    else:
-        size = get_value_units_micrometer(source0.get_physical_size())
-        origins = np.array([(tile['translation']['x'], tile['translation']['y']) for tile in images])
+    sim0 = msi_utils.get_sim_from_msim(images[0])
+    spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+    size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+    origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
+                        for msim in images])
     #threshold = [np.mean(np.diff(np.sort(origins[:, dimi]))) for dimi in range(len(spatial_dims))]
     threshold = np.array(size)
     threshold_half = threshold / 2
@@ -344,12 +337,13 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     return mappings_dict, score, msims0, fused_image
 
 
-def save_image(filename, data, npyramid_add=4, pyramid_downsample=2):
+def save_image(filename, data, transform_key='registered', npyramid_add=4, pyramid_downsample=2):
+    dimension_order = ''.join(data.dims)
     sdims = si_utils.get_spatial_dims_from_sim(data)
     nsdims = si_utils.get_nonspatial_dims_from_sim(data)
 
     origin = si_utils.get_origin_from_sim(data)
-    transform_key = 'registered'
+
     transform = si_utils.get_affine_from_sim(data, transform_key)
     for nsdim in nsdims:
         if nsdim in transform.dims:
@@ -364,14 +358,14 @@ def save_image(filename, data, npyramid_add=4, pyramid_downsample=2):
     for isdim, sdim in enumerate(sdims):
         origin[sdim] += transform_translation[isdim]
 
-    axes = ''.join(data.dims)
     pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
     position = [origin[dim] for dim in sdims]
-    channels = [{'name': c} for c in data.c.data]
+    channels = [{'name': c} for c in data.c.data]   # separate provide channel color
+    positions = [position for _ in channels]        # separately provide per channel position information
 
-    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, position, channels,
+    save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, position, channels,
                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
-    save_ome_zarr(filename + '.ome.zarr', data.data, pixel_size, position, channels,
+    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, positions, channels,
                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
 
 
@@ -434,11 +428,11 @@ def run_simple():
     else:
         filenames = dir_regex(input)
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
-    source0 = create_source(filenames[0])
     tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
 
     if do_fix_missing_rotation:
         # hack to fix rotation
+        source0 = create_source(filenames[0])
         fix_missing_rotation(tiles, source0)
 
     print('Converting tiles...')
@@ -459,7 +453,7 @@ def run_simple():
     #                         show_plot=False, output_filename=original_tiles_filename)
 
     #print('Saving fused image...')
-    #save_image(original_fused_filename, original_fused, source0)
+    #save_image(original_fused_filename, original_fused, transform_key='stage_metadata')
     #show_image(original_fused.data[0, 0, ...])
 
     mappings, score, msims, registered_fused = (
@@ -477,7 +471,7 @@ def run_simple():
                              show_plot=False, output_filename=registered_tiles_filename)
 
     print('Saving fused image...')
-    save_image(registered_fused_filename, registered_fused, source0)
+    save_image(registered_fused_filename, registered_fused, transform_key='registered')
     #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
     #show_image(registered_fused.data[0, 0, ...])
 
@@ -495,8 +489,6 @@ def run():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    source0 = create_source(filenames[0])
-    source0.position = []
     tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     sims1 = images_to_sims(tiles1)
     mappings1, score, msims1, registered_fused1 = (
@@ -508,7 +500,7 @@ def run():
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered1.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, source0)
+    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered')
 
     input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
@@ -525,7 +517,7 @@ def run():
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered2.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, source0)
+    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered')
 
     sims = [registered_fused1, registered_fused2]
     # set dummy position
@@ -546,7 +538,7 @@ def run():
                              show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered'), registered_fused)
+    save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered')
 
 
 if __name__ == '__main__':

@@ -547,3 +547,13 @@ def flatfield_correction(image0, dark=0, bright=1, clip=True):
     if clip:
         image = np.clip(image, 0, 1)
     return image
+
+
+def get_max_downsamples(shape, npyramid_add, pyramid_downsample):
+    shape = list(shape)
+    for i in range(npyramid_add):
+        shape[-1] //= pyramid_downsample
+        shape[-2] //= pyramid_downsample
+        if shape[-1] < 1 or shape[-2] < 1:
+            return i
+    return npyramid_add
