@@ -56,7 +56,7 @@ def create_tiff_metadata(pixel_size, positions, channels, is_ome=False):
         resolution = [1e4 / size for size in pixel_size_um]
 
     if is_ome:
-        ome_metadata = {}
+        ome_metadata = {'Creator': 'multiview-stitcher'}
         ome_channels = []
         if pixel_size_um is not None:
             ome_metadata['PhysicalSizeX'] = float(pixel_size_um[0])
@@ -73,8 +73,8 @@ def create_tiff_metadata(pixel_size, positions, channels, is_ome=False):
             plane_metadata['PositionY'] = [float(position[1]) for position in positions]
             plane_metadata['PositionYUnit'] = ['µm' for _ in positions]
             if len(positions[0]) > 2:
-                ome_metadata['PositionZ'] = [float(position[2]) for position in positions]
-                ome_metadata['PositionZUnit'] = ['µm' for _ in positions]
+                plane_metadata['PositionZ'] = [float(position[2]) for position in positions]
+                plane_metadata['PositionZUnit'] = ['µm' for _ in positions]
             ome_metadata['Plane'] = plane_metadata
         for channeli, channel in enumerate(channels):
             ome_channel = {'Name': channel.get('label', str(channeli))}
