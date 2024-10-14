@@ -1,7 +1,5 @@
 import cv2 as cv
 import numpy as np
-import PIL.Image
-from PIL.ExifTags import TAGS
 import tifffile
 from scipy.ndimage import gaussian_filter
 from skimage.transform import downscale_local_mean
@@ -15,11 +13,6 @@ except Exception as e:
     print(f'matplotlib import error:\n{e}')
 
 from src.util import *
-
-
-def save_image(image: np.ndarray, filename: str, output_params: dict = {}):
-    compression = output_params.get('compression')
-    PIL.Image.fromarray(image).save(filename, compression=compression)
 
 
 def show_image(image: np.ndarray):
@@ -416,20 +409,6 @@ def tiff_info_short(filename: str) -> str:
         nom_size += page.size
     s += f' Image size:{nom_size} File size:{real_size} Overall compression: 1:{nom_size / real_size:.1f}'
     return s
-
-
-def get_pil_metadata(image: PIL.Image) -> dict:
-    metadata = {}
-    exifdata = image.getexif()
-    for tag_id in exifdata:
-        tag = TAGS.get(tag_id, tag_id)
-        data = exifdata.get(tag_id)
-        if isinstance(data, bytes):
-            data = data.decode()
-        metadata[tag] = data
-    if metadata == {}:
-        metadata = image.info
-    return metadata
 
 
 def compare_image(image0, image1, show=False) -> float:

@@ -6,7 +6,7 @@ from src.image.util import get_max_downsamples, create_compression_filter
 from src.ome_zarr_util import create_axes_metadata, create_transformation_metadata, create_channel_ome_metadata
 
 
-def save_ome_zarr(filename, data, dimension_order, pixel_size, translation, channel_metadata,
+def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, translation,
                   tile_size=(256, 256), compression=None,
                   npyramid_add=0, pyramid_downsample=2, zarr_version=2, ome_version='0.4'):
     npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
@@ -38,4 +38,4 @@ def save_ome_zarr(filename, data, dimension_order, pixel_size, translation, chan
     data_smallest = zarr_root.get(keys[-1])
 
     # get smallest size image
-    zarr_root.attrs['omero'] = create_channel_ome_metadata(data_smallest, dimension_order, channel_metadata, ome_version)
+    zarr_root.attrs['omero'] = create_channel_ome_metadata(data_smallest, dimension_order, channels, ome_version)

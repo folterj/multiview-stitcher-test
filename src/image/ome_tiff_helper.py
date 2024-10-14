@@ -5,7 +5,7 @@ from src.image.util import get_max_downsamples
 from src.util import *
 
 
-def save_ome_tiff(filename, data, pixel_size, positions, channels,
+def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
                   tile_size=(256, 256), compression='LZW',
                   npyramid_add=0, pyramid_downsample=2):
     npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
@@ -44,7 +44,7 @@ def save_ome_tiff(filename, data, pixel_size, positions, channels,
                          resolution=resolution, resolutionunit=resolutionunit, metadata=metadata)
 
 
-def create_tiff_metadata(pixel_size, positions, channels, is_ome=False):
+def create_tiff_metadata(pixel_size, positions=[], channels=[], is_ome=False):
     ome_metadata = None
     resolution = None
     resolution_unit = None
@@ -66,7 +66,7 @@ def create_tiff_metadata(pixel_size, positions, channels, is_ome=False):
             if len(pixel_size_um) > 2:
                 ome_metadata['PhysicalSizeZ'] = float(pixel_size_um[2])
                 ome_metadata['PhysicalSizeZUnit'] = 'µm'
-        if positions is not None:
+        if positions is not None and len(positions) > 0:
             plane_metadata = {}
             plane_metadata['PositionX'] = [float(position[0]) for position in positions]
             plane_metadata['PositionXUnit'] = ['µm' for _ in positions]

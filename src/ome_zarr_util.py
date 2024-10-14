@@ -81,18 +81,21 @@ def create_channel_metadata(source, ome_version):
     return metadata
 
 
-def create_channel_ome_metadata(data, dimension_order, channel_metadata, ome_version):
+def create_channel_ome_metadata(data, dimension_order, channels, ome_version):
     if 'c' in dimension_order:
         nchannels = data.shape[dimension_order.index('c')]
     else:
         nchannels = 1
-    if len(channel_metadata) < nchannels == 3:
-        labels = ['Red', 'Green', 'Blue']
-        colors = [(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)]
-        channel_metadata = [{'label': label, 'color': color} for label, color in zip(labels, colors)]
+    if channels is None or len(channels) < nchannels:
+        if nchannels == 3:
+            labels = ['Red', 'Green', 'Blue']
+            colors = [(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)]
+            channels = [{'label': label, 'color': color} for label, color in zip(labels, colors)]
+        else:
+            channels = [{'label': f'Channel {channeli}'} for channeli in range(nchannels)]
 
     omezarr_channels = []
-    for channeli, channel0 in enumerate(channel_metadata):
+    for channeli, channel0 in enumerate(channels):
         channel = channel0.copy()
         color = channel.get('color', (1, 1, 1, 1))
         channel['color'] = rgba_to_hexrgb(color)
