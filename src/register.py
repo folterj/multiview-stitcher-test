@@ -214,6 +214,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         threshold = np.median(tile_vars)    # using median by definition 50% of the tiles
         foregrounds = (tile_vars > threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
+        #threshold, foregrounds = filter_noise_images(sims)
+        #foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
         print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
@@ -382,8 +384,6 @@ def dir_regex(pattern):
 
 
 def run_simple():
-    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
-
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
@@ -546,6 +546,10 @@ def run():
 
 
 if __name__ == '__main__':
+    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+
     #run_simple()
     run()
+
     print('Done!')
+    print()

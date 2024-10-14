@@ -501,8 +501,10 @@ def create_normalisation_images(images, quantiles, nchannels=1):
         median_image = calc_images_median(channel_images)
         difs = [np.mean(np.abs(image.astype(np.float32) - median_image.astype(np.float32)), (0, 1)) for image in images]
         threshold = np.mean(difs, 0)
-        images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
-        norm_images = calc_images_quantiles(images, quantiles)
+        back_images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
+        #threshold, foregrounds = filter_noise_images(channel_images)
+        #back_images = [image for image, foreground in zip(images, foregrounds) if not foreground]
+        norm_images = calc_images_quantiles(back_images, quantiles)
         channel_images2.append(norm_images)
 
     quantile_images = []
@@ -536,3 +538,12 @@ def get_max_downsamples(shape, npyramid_add, pyramid_downsample):
         if shape[-1] < 1 or shape[-2] < 1:
             return i
     return npyramid_add
+
+
+def filter_noise_images(images):
+    dtype = images[0].dtype
+    maxval = 2 ** (8 * dtype.itemsize) - 1
+    image_vars = [np.asarray(np.std(image)).item() for image in images]
+    threshold, mask0 = cv.threshold(np.array(image_vars).astype(dtype), 0, maxval, cv.THRESH_OTSU)
+    mask = [flag.item() for flag in mask0.astype(bool)]
+    return int(threshold), mask
