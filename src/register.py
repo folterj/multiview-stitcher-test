@@ -1,3 +1,6 @@
+# https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
+# https://github.com/pydata/xarray/issues/8828
+
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -8,10 +11,11 @@ from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
+
+from ome_zarr.scale import Scaler
 from tqdm import tqdm
 import xarray as xr
 
-from src.OmeSource import get_resolution_from_pixel_size
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
 from src.image.ome_tiff_helper import save_ome_tiff
@@ -330,8 +334,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         ) for sim in sims0]
         channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]})
                         for simi, sim in enumerate(channel_sims)]
-        fused_image = xr.combine_by_coords([sim.rename() for sim in channel_sims],
-                                           combine_attrs='override')
+        #fused_image = xr.combine_by_coords([sim.rename(None) for sim in channel_sims], combine_attrs='override')
+        fused_image = xr.combine_nested([sim.rename() for sim in channel_sims], concat_dim='c', combine_attrs='override')
     else:
         fused_image = fusion.fuse(
             sims0,
@@ -340,7 +344,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     return mappings_dict, score, msims0, fused_image
 
 
-def save_image(filename, data, transform_key='registered', channels=None, positions=None, npyramid_add=4, pyramid_downsample=2):
+def save_image(filename, data, transform_key=None, channels=None, positions=None, npyramid_add=4, pyramid_downsample=2):
     dimension_order = ''.join(data.dims)
     sdims = si_utils.get_spatial_dims_from_sim(data)
     nsdims = si_utils.get_nonspatial_dims_from_sim(data)
@@ -349,19 +353,20 @@ def save_image(filename, data, transform_key='registered', channels=None, positi
     pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
 
     origin = si_utils.get_origin_from_sim(data)
-    transform = si_utils.get_affine_from_sim(data, transform_key)
-    for nsdim in nsdims:
-        if nsdim in transform.dims:
-            transform = transform.sel(
-                {
-                    nsdim: transform.coords[nsdim][0]
-                    for nsdim in transform.dims
-                }
-            )
-    transform = np.array(transform)
-    transform_translation = param_utils.translation_from_affine(transform)
-    for isdim, sdim in enumerate(sdims):
-        origin[sdim] += transform_translation[isdim]
+    if transform_key is not None:
+        transform = si_utils.get_affine_from_sim(data, transform_key)
+        for nsdim in nsdims:
+            if nsdim in transform.dims:
+                transform = transform.sel(
+                    {
+                        nsdim: transform.coords[nsdim][0]
+                        for nsdim in transform.dims
+                    }
+                )
+        transform = np.array(transform)
+        transform_translation = param_utils.translation_from_affine(transform)
+        for isdim, sdim in enumerate(sdims):
+            origin[sdim] += transform_translation[isdim]
     position = [origin[dim] for dim in sdims]
     if positions is None:
         positions = [position] * nchannels
@@ -369,10 +374,19 @@ def save_image(filename, data, transform_key='registered', channels=None, positi
     if channels is None:
         channels = data.attrs.get('channels', [])
 
-    save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position,
-                  npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
-    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions,
-                  npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
+    npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
+    scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
+
+    print('writing ome-zarr')
+    progress = tqdm()
+    save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
+    progress.update()
+    progress.close()
+    print('writing ome-tiff')
+    progress = tqdm()
+    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
+    progress.update()
+    progress.close()
 
 
 def dir_regex(pattern):
