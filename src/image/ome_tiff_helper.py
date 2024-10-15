@@ -1,18 +1,10 @@
-from tifffile import TiffWriter, PHOTOMETRIC
+from tifffile import TiffWriter
 
 from src.util import *
 
 
 def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
-                  tile_size=(256, 256), compression='LZW', scaler=None):
-
-    if data.ndim <= 3 and data.shape[-1] in (3, 4):
-        photometric = PHOTOMETRIC.RGB
-        move_channel = False
-    else:
-        photometric = PHOTOMETRIC.MINISBLACK
-        # move channel axis to front
-        move_channel = (data.ndim >= 3 and data.shape[-1] < data.shape[0])
+                  tile_size=(1024, 1024), compression='LZW', scaler=None):
 
     ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, positions, channels, is_ome=True)
 
@@ -21,8 +13,14 @@ def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
     else:
         npyramid_add = 0
 
-    chunking0 = tuple(reversed(tile_size))
-    chunking = tuple(reversed(tile_size))
+    use_chunking = (tile_size is not None)
+    if use_chunking:
+        chunking0 = tuple(reversed(tile_size))
+        chunking = tuple(reversed(tile_size))
+    else:
+        chunking0 = None
+        chunking = (1024, 1024)
+
     with TiffWriter(filename) as writer:
         for i in range(npyramid_add + 1):
             if i == 0:
@@ -38,12 +36,11 @@ def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
                 resolution = None
                 resolutionunit = None
                 data = scaler.resize_image(data)
-            chunking = retuple(chunking, data.shape)
-            data = data.rechunk(chunks=chunking)
-
-            ordered_data = np.moveaxis(data, -1, 0) if move_channel else data
-
-            writer.write(ordered_data, photometric=photometric, subifds=subifds, subfiletype=subfiletype,
+            if use_chunking or (data.chunksize == data.shape and
+                                chunking[-1] < data.chunksize[-1] and chunking[-2] < data.chunksize[-2]):
+                chunking = retuple(chunking, data.shape)
+                data = data.rechunk(chunks=chunking)
+            writer.write(data, subifds=subifds, subfiletype=subfiletype,
                          tile=chunking0, compression=compression,
                          resolution=resolution, resolutionunit=resolutionunit, metadata=metadata)
 

@@ -10,7 +10,7 @@ if __name__ == '__main__':
                 {'label': 'Fluorescence', 'color': (0, 1, 0)}]
 
     data = xr.DataArray(
-        da.random.randint(0, 255, size=(2, 2048, 2048), dtype=da.uint16),
+        da.random.randint(0, 65535, size=(2, 2048, 2048), dtype=da.uint16),
         dims=list('cyx'),
         coords={'c': [channel['label'] for channel in channels]},
         attrs={'channels': channels},
@@ -19,3 +19,4 @@ if __name__ == '__main__':
     #data.assign_attrs({'channels': channels})
 
     save_image(filename, data, channels=channels)
+    print('Done!')
