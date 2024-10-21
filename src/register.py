@@ -11,7 +11,6 @@ from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
 import re
-
 from ome_zarr.scale import Scaler
 from tqdm import tqdm
 import xarray as xr
@@ -22,25 +21,6 @@ from src.image.ome_tiff_helper import save_ome_tiff
 from src.image.ome_zarr_helper import save_ome_zarr
 from src.image.util import *
 from src.util import *
-
-
-def create_example_tiles():
-    tile_translations = [
-        {"z": 2.5, "y": -10, "x": 30},
-        {"z": 2.5, "y": 30, "x": 10},
-        {"z": 2.5, "y": 30, "x": 50},
-    ]
-    dim_order = "czyx"
-    scale = {"z": 2, "y": 0.5, "x": 0.5}
-    channels = ["DAPI", "GFP"]
-
-    tiles = [{'dim_order': dim_order,
-              'translation': tile_translation,
-              'scale': scale,
-              'channels': channels,
-              'data': np.random.randint(0, 100, (2, 10, 100, 100))}
-             for tile_translation in tile_translations]
-    return tiles
 
 
 def create_source(filename):
@@ -54,8 +34,8 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False):
-    tiles = []
+def init_sims(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False):
+    sims = []
     sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
     images = []
@@ -76,34 +56,50 @@ def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False):
         max_image = max_image / np.float32(maxval)
         images = [float2int_image(flatfield_correction(int2float_image(image), bright=max_image), dtype) for image in images]
 
+    translations = []
     for source, image in zip(sources, images):
-        translation = convert_xyz_to_dict(get_value_units_micrometer(source.position))
+        translation = np.array(get_value_units_micrometer(source.position))
         if invert_x_coordinates:
-            translation['x'] = -translation['x']
-        translation['y'] = -translation['y']
+            translation[0] = -translation[0]
+        translation[1] = -translation[1]
+        translations.append(translation)
+
+    if is_fix_missing_rotation:
+        source0 = sources[0]
+        size = np.array(source0.get_size()) * source0.get_pixel_size_micrometer()
+        translations = fix_missing_rotation(translations, size)
+
+    for source, image, translation in zip(sources, images, translations):
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
+        translation = convert_xyz_to_dict(translation)
         if not translation.keys() == scale.keys():
             translation = {key: translation.get(key, 0) for key in scale.keys()}
-        tile = {'dim_order': output_order,
-                'translation': translation,
-                'scale': scale,
-                'channels': source.get_channels(),
-                'data': image}
-        tiles.append(tile)
-    return tiles
+        channel_labels = [channel.get('label', '') for channel in source.get_channels()]
+        sim = si_utils.get_sim_from_array(
+            image,
+            dims=list(output_order),
+            scale=scale,
+            translation=translation,
+            transform_key="stage_metadata",
+            c_coords=channel_labels
+        )
+        sims.append(sim)
+
+    return sims
 
 
-def fix_missing_rotation(tiles, source0):
-    positions = [np.array(list(tile['translation'].values())) for tile in tiles]
-    positions_centre = np.mean(positions, 0)
-    center_index = np.argmin([math.dist(position, positions_centre) for position in positions])
-    center_position = positions[center_index]
-    pairs = get_orthogonal_pairs_from_msims(tiles, source0)
+def fix_missing_rotation(positions0, size):
+    # in [xy(z)]
+    positions = []
+    positions_centre = np.mean(positions0, 0)
+    center_index = np.argmin([math.dist(position, positions_centre) for position in positions0])
+    center_position = positions0[center_index]
+    pairs = get_orthogonal_pairs_from_tiles(positions0, size)
     angles = []
     rotations = []
     for pair in pairs:
-        vector = positions[pair[1]] - positions[pair[0]]
+        vector = positions0[pair[1]] - positions0[pair[0]]
         angle = np.rad2deg(np.arctan(vector[1] / vector[0]))
         angles.append(angle)
         rotation = angle
@@ -114,11 +110,10 @@ def fix_missing_rotation(tiles, source0):
         rotations.append(rotation)
     rotation = np.mean(rotations)
     transform = create_transform(center=center_position, angle=rotation)
-    for tile in tiles:
-        keys = list(tile['translation'].keys())
-        position = np.array(list(tile['translation'].values()))
-        position = apply_transform([position], transform)[0]
-        tile['translation'] = {dim: value for dim, value in zip(keys, position)}
+    for position0 in positions0:
+        position = apply_transform([position0], transform)[0]
+        positions.append(position)
+    return positions
 
 
 def normalise_global(sims):
@@ -149,43 +144,18 @@ def normalise(sims):
     return new_sims
 
 
-def images_to_sims(tiles):
-    # build input for stitching
-    sims = []
-    for tile in tqdm(tiles):
-        # input data (can be any numpy compatible array: numpy, dask, cupy, etc.)
-        channel_labels = [channel.get('label', '') for channel in tile['channels']]
-        sim = si_utils.get_sim_from_array(
-            tile['data'],
-            dims=list(tile['dim_order']),
-            scale=tile['scale'],
-            translation=tile['translation'],
-            transform_key="stage_metadata",
-            c_coords=channel_labels
-        )
-        sims.append(sim)
-    return sims
-
-
-def get_orthogonal_pairs_from_msims(images):
+def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     """
-    Get pairs of orthogonal neighbors from a list of msims.
-    This assumes that the msims are placed on a regular grid.
+    Get pairs of orthogonal neighbors from a list of tiles.
+    This assumes that the tiles are placed on a regular grid.
     """
 
-    # get positions (image origins) of msims to be registered
-    sim0 = msi_utils.get_sim_from_msim(images[0])
-    spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-    size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-    origins = np.array([[si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim))[dim] for dim in spatial_dims]
-                        for msim in images])
-    #threshold = [np.mean(np.diff(np.sort(origins[:, dimi]))) for dimi in range(len(spatial_dims))]
-    threshold = np.array(size)
+    threshold = image_size_um
     threshold_half = threshold / 2
 
-    # get pairs of neighboring msims
+    # get pairs of neighboring tiles
     pairs = []
-    for i, j in np.transpose(np.triu_indices(len(images), 1)):
+    for i, j in np.transpose(np.triu_indices(len(origins), 1)):
         relvec = abs(origins[i] - origins[j])
         if np.any(relvec < threshold_half) and np.all(relvec < threshold):
             pairs.append((i, j))
@@ -245,7 +215,11 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     progress = tqdm()
 
     if use_orthogonal_pairs:
-        pairs = get_orthogonal_pairs_from_msims(register_msims)
+        register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
+        origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
+        sim0 = register_sims[0]
+        size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
+        pairs = get_orthogonal_pairs_from_tiles(origins, size)
     else:
         pairs = None
     with ProgressBar():
@@ -406,7 +380,7 @@ def run_stitch(input, target, params):
     normalisation = reg_params.get('normalisation', False)
     filter_foreground = reg_params.get('filter_foreground', False)
     use_orthogonal_pairs = reg_params.get('use_orthogonal_pairs', False)
-    do_fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
+    is_fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
     use_rotation = reg_params.get('use_rotation', False)
     reg_channel = reg_params.get('reg_channel', 0)
 
@@ -431,15 +405,8 @@ def run_stitch(input, target, params):
     else:
         filenames = dir_regex(input)
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
-    tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
-
-    if do_fix_missing_rotation:
-        # hack to fix rotation
-        source0 = create_source(filenames[0])
-        fix_missing_rotation(tiles, source0)
-
-    print('Converting tiles...')
-    sims = images_to_sims(tiles)
+    sims = init_sims(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
+                     is_fix_missing_rotation=is_fix_missing_rotation)
 
     # before registration:
     print('Fusing original...')
@@ -491,8 +458,7 @@ def run_stitch_overlay():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    tiles1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    sims1 = images_to_sims(tiles1)
+    sims1 = init_sims(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings1, score, msims1, registered_fused1 = (
         register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')
@@ -508,8 +474,7 @@ def run_stitch_overlay():
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    tiles2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    sims2 = images_to_sims(tiles2)
+    sims2 = init_sims(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings2, score, msims2, registered_fused2 = (
         register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')

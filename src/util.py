@@ -230,8 +230,8 @@ def apply_transform(points, transform):
     return new_points
 
 
-def convert_xyz_to_dict(xyz):
-    dct = {dim: value for dim, value in zip('xyz', xyz)}
+def convert_xyz_to_dict(xyz, axes='xyz'):
+    dct = {dim: value for dim, value in zip(axes, xyz)}
     return dct
 
 
