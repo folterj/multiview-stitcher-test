@@ -10,7 +10,7 @@ registration:
   invert_x_coordinates: False
   fix_missing_rotation: True
   #flatfield_quantile: 0.95
-  normalisation: False
+  normalisation: True
   filter_foreground: False
   use_orthogonal_pairs: True
   use_rotation: False
