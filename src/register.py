@@ -116,30 +116,34 @@ def fix_missing_rotation(positions0, size):
     return positions
 
 
-def normalise_global(sims):
+def normalise(sims, use_global=True):
     new_sims = []
-    # normalise using global mean and stddev
-    means = []
-    stddevs = []
-    for sim in sims:
-        means.append(np.mean(sim.data))
-        stddevs.append(np.std(sim.data))
-    mean = np.mean(means)
-    stddev = np.mean(stddevs)
+    # global mean and stddev
+    if use_global:
+        means = []
+        stddevs = []
+        for sim in sims:
+            means.append(np.mean(sim.data))
+            stddevs.append(np.std(sim.data))
+        mean = np.mean(means)
+        stddev = np.mean(stddevs)
+    else:
+        mean = 0
+        stddev = 1
     # normalise all images
     for sim in sims:
-        new_sim = sim.copy()
-        new_sim.data = np.clip((sim.data - mean) / stddev, 0, 1).astype(np.float32)
-        new_sims.append(new_sim)
-    return new_sims
-
-
-def normalise(sims):
-    new_sims = []
-    # normalise all images individually
-    for sim in sims:
-        new_sim = sim.copy()
-        new_sim.data = np.clip((sim.data - np.mean(sim.data)) / np.std(sim.data), 0, 1).astype(np.float32)
+        if not use_global:
+            mean = np.mean(sim.data)
+            stddev = np.std(sim.data)
+        image = float2int_image(np.clip((sim.data - mean) / stddev, 0, 1))
+        new_sim = si_utils.get_sim_from_array(
+            image,
+            dims=sim.dims,
+            scale=si_utils.get_spacing_from_sim(sim),
+            translation=si_utils.get_origin_from_sim(sim),
+            transform_key=si_utils.get_tranform_keys_from_sim(sim)[0],
+            c_coords=sim.c
+        )
         new_sims.append(new_sim)
     return new_sims
 
@@ -172,10 +176,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     is_channel_overlay = (len(channels) > 0)
     # normalisation
     if normalisation:
-        if is_channel_overlay:
-            sims = normalise(sims0)
-        else:
-            sims = normalise_global(sims0)
+        sims = normalise(sims0, use_global=not is_channel_overlay)
     else:
         sims = sims0
 

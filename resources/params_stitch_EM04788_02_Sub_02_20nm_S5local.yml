@@ -1,0 +1,42 @@
+# input parameters
+input:
+  # source - input folder or URL (pattern or list supported)
+  source:
+    - D:/slides/EM04788_02_Sub_02/Section5/.*.ome.tif
+
+# registration/stitching parameters
+registration:
+  invert_x_coordinates: False
+  fix_missing_rotation: True
+  #flatfield_quantile: 0.95
+  normalisation: True
+  filter_foreground: False
+  use_orthogonal_pairs: True
+  use_rotation: False
+  reg_channel: 0
+
+# output parameters
+output:
+  # target - output base path
+  target: stitched/stitched_
+  # format - output image format(s)
+  format: ome.zarr, ome.tiff
+  # overwrite - overwrite existing files in output folder
+  overwrite: True
+  # break_on_error - stop processing when error occurs
+  break_on_error: True
+  # tile_size - size for optional tiling
+  tile_size: []
+  # compression - optional compression format/level
+  compression: []
+  # npyramid_add - number of pyramid size levels to add
+  npyramid_add: 3
+  # pyramid_downsample - factor each pyramid level is down-sampled
+  pyramid_downsample: 2
+  # extra channel metadata (e.g. used for combine operation)
+  extra_metadata: {'channels': [{'label':reflection, 'color':[1, 1, 1, 1]}, {'label':fluorescence, 'color':[0, 1, 0, 1]}]}
+
+# logging parameters
+log:
+  filename: log/multiview-stitcher-test.log
+  log_format: '%(asctime)s %(levelname)s: %(message)s'
