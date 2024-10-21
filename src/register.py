@@ -397,42 +397,27 @@ def dir_regex(pattern):
     return files_sorted
 
 
-def run_simple():
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+def run_stitch(input, target, params):
+    reg_params = params['registration']
+    out_params = params['output']
 
-    #input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
+    invert_x_coordinates = reg_params.get('invert_x_coordinates', False)
+    flatfield_quantile = reg_params.get('flatfield_quantile')
+    normalisation = reg_params.get('normalisation', False)
+    filter_foreground = reg_params.get('filter_foreground', False)
+    use_orthogonal_pairs = reg_params.get('use_orthogonal_pairs', False)
+    fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
+    use_rotation = reg_params.get('use_rotation', False)
+    reg_channel = reg_params.get('reg_channel', 0)
 
-    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/t.*/.*.ome.tif'
-    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif'
+    npyramid_add = out_params.get('npyramid_add', 0)
+    pyramid_downsample = out_params.get('pyramid_downsample', 2)
+    channels = out_params.get('channels', [])
 
-    invert_x_coordinates = True
-    flatfield_quantile = 0.95
-    normalisation = False
-    filter_foreground = True
-    use_orthogonal_pairs = True
-
-    #invert_x_coordinates = False
-    #flatfield_quantile = None
-    #filter_foreground = False
-    #use_orthogonal_pairs = True
-
-    do_fix_missing_rotation = False
-    use_rotation = False
-
-    reg_channel = 0
-
-    output_dir = 'output'
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    original_tiles_filename = os.path.join(output_dir, 'tiles_original.png')
-    original_fused_filename = os.path.join(output_dir, 'original')
-    registered_tiles_filename = os.path.join(output_dir, 'tiles_registered.png')
-    registered_fused_filename = os.path.join(output_dir, 'registered')
+    original_positions_filename = target + 'positions_original.png'
+    original_fused_filename = target + 'original'
+    registered_positions_filename = target + 'positions_registered.png'
+    registered_fused_filename = target + 'registered'
 
     mvsr_logger = logging.getLogger('multiview_stitcher.registration')
     mvsr_logger.setLevel(logging.INFO)
@@ -448,7 +433,7 @@ def run_simple():
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
     tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
 
-    if do_fix_missing_rotation:
+    if fix_missing_rotation:
         # hack to fix rotation
         source0 = create_source(filenames[0])
         fix_missing_rotation(tiles, source0)
@@ -464,38 +449,37 @@ def run_simple():
     )
 
     # plot the tile configuration
-    #print('Plotting tiles...')
-    #msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-    #vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-    #                         view_labels=file_indices, view_labels_size=3,
-    #                         show_plot=False, output_filename=original_tiles_filename)
+    print('Plotting tiles...')
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
+    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+                             view_labels=file_indices, view_labels_size=3,
+                             show_plot=False, output_filename=original_positions_filename)
 
-    #print('Saving fused image...')
-    #save_image(original_fused_filename, original_fused, transform_key='stage_metadata')
-    #show_image(original_fused.data[0, 0, ...])
+    print('Saving fused image...')
+    save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
+               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
 
     mappings, score, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                  use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation))
     print(f'Score: {score:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
-    with open(os.path.join(output_dir, 'mappings.json'), 'w') as file:
+    with open(target + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
 
     # plot the tile configuration after registration
     print('Plotting tiles...')
     vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
-                             show_plot=False, output_filename=registered_tiles_filename)
+                             show_plot=False, output_filename=registered_positions_filename)
 
     print('Saving fused image...')
     positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
-    save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions)
-    #show_image(registered_fused.data[0, 0, 5, ...]) # XYZ example data - show middle of Z depth
-    #show_image(registered_fused.data[0, 0, ...])
+    save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions,
+               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
 
 
-def run():
+def run_stitch_overlay():
     output_dir = 'output'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -559,11 +543,37 @@ def run():
     save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels)
 
 
-if __name__ == '__main__':
+def run(params):
     print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
-    #run_simple()
-    run()
+    sources = ensure_list(params['input']['source'])
+
+    for source in sources:
+        print('Source:', source)
+        source_dir = os.path.dirname(source)
+        target = os.path.join(source_dir, params['output']['target'])
+        target_dir = os.path.dirname(target)
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+        run_stitch(source, target, params)
 
     print('Done!')
     print()
+
+
+if __name__ == '__main__':
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/tiles_1_MMStack_New Grid 1-Grid_5_.*.ome.tif'     # one column of tiles
+    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+
+    #input = ['output_reflect_orth/registered.ome.zarr', 'output_fluor_orth/registered.ome.zarr']
+
+    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/t.*/.*.ome.tif'
+    #input = 'D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif'
+
+    output_dir = 'output'
+
+    run_stitch(input, output_dir)
+    #run_stitch_overlay()
