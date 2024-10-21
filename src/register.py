@@ -406,7 +406,7 @@ def run_stitch(input, target, params):
     normalisation = reg_params.get('normalisation', False)
     filter_foreground = reg_params.get('filter_foreground', False)
     use_orthogonal_pairs = reg_params.get('use_orthogonal_pairs', False)
-    fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
+    do_fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
     use_rotation = reg_params.get('use_rotation', False)
     reg_channel = reg_params.get('reg_channel', 0)
 
@@ -433,7 +433,7 @@ def run_stitch(input, target, params):
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
     tiles = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates)
 
-    if fix_missing_rotation:
+    if do_fix_missing_rotation:
         # hack to fix rotation
         source0 = create_source(filenames[0])
         fix_missing_rotation(tiles, source0)
