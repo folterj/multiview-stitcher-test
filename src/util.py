@@ -4,8 +4,6 @@ import os
 import re
 import numpy as np
 
-from src.image.color_conversion import rgba_to_int
-
 
 def get_default(x, default):
     return default if x is None else x
@@ -251,4 +249,4 @@ def retuple(chunks, shape):
         return tuple([chunks] * len(shape))
 
     dims_to_add = len(shape) - len(chunks)
-    return (*shape[:dims_to_add], *chunks)
+    return *shape[:dims_to_add], *chunks

@@ -34,7 +34,7 @@ def create_source(filename):
     return source
 
 
-def init_sims(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False):
+def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False):
     sims = []
     sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
@@ -97,24 +97,15 @@ def fix_missing_rotation(positions0, size):
     positions_centre = np.mean(positions0, 0)
     center_index = np.argmin([math.dist(position, positions_centre) for position in positions0])
     center_position = positions0[center_index]
-    pairs = get_orthogonal_pairs_from_tiles(positions0, size)
-    angles = []
-    rotations = []
-    for pair in pairs:
-        vector = positions0[pair[1]] - positions0[pair[0]]
-        angle = np.rad2deg(np.arctan(vector[1] / vector[0]))
-        angles.append(angle)
-        rotation = angle
-        if rotation < -45:
-            rotation += 90
-        if rotation > 45:
-            rotation -= 90
-        rotations.append(rotation)
-    rotation = np.mean(rotations)
-    transform = create_transform(center=center_position, angle=rotation)
-    for position0 in positions0:
-        position = apply_transform([position0], transform)[0]
-        positions.append(position)
+    pairs, angles = get_orthogonal_pairs_from_tiles(positions0, size)
+    if len(pairs) > 0:
+        rotation = np.mean(angles)
+        transform = create_transform(center=center_position, angle=rotation)
+        for position0 in positions0:
+            position = apply_transform([position0], transform)[0]
+            positions.append(position)
+    else:
+        positions = positions0
     return positions
 
 
@@ -153,20 +144,26 @@ def normalise(sims, use_global=True):
 def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     """
     Get pairs of orthogonal neighbors from a list of tiles.
-    This assumes that the tiles are placed on a regular grid.
+    Tiles don't have to be placed on a regular grid.
     """
-
-    threshold = image_size_um
-    threshold_half = threshold / 2
-
-    # get pairs of neighboring tiles
     pairs = []
+    angles = []
     for i, j in np.transpose(np.triu_indices(len(origins), 1)):
-        relvec = abs(origins[i] - origins[j])
-        if np.any(relvec < threshold_half) and np.all(relvec < threshold):
+        origini = origins[i]
+        originj = origins[j]
+        distance = math.dist(origini, originj)
+        if distance < max(image_size_um):
             pairs.append((i, j))
-
-    return pairs
+            vector = origini - originj
+            angle = math.degrees(math.atan2(vector[1], vector[0]))
+            if distance < min(image_size_um):
+                angle += 90
+            while angle < -90:
+                angle += 180
+            while angle > 90:
+                angle -= 180
+            angles.append(angle)
+    return pairs, angles
 
 
 def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
@@ -222,7 +219,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
         sim0 = register_sims[0]
         size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
-        pairs = get_orthogonal_pairs_from_tiles(origins, size)
+        pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
     else:
         pairs = None
     with ProgressBar():
@@ -411,8 +408,8 @@ def run_stitch(input, target, params):
         return
 
     print('Initialising tiles...')
-    sims = init_sims(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
-                     is_fix_missing_rotation=is_fix_missing_rotation)
+    sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
+                      is_fix_missing_rotation=is_fix_missing_rotation)
 
     if show_original:
         # before registration:
@@ -465,7 +462,7 @@ def run_stitch_overlay():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    sims1 = init_sims(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
+    sims1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings1, score, msims1, registered_fused1 = (
         register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')
@@ -481,7 +478,7 @@ def run_stitch_overlay():
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    sims2 = init_sims(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
+    sims2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings2, score, msims2, registered_fused2 = (
         register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True))
     print(f'Score: {score:.3f}')

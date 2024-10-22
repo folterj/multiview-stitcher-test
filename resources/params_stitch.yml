@@ -1,17 +1,15 @@
 # input parameters
 input:
   # source - input folder or URL (pattern or list supported)
-  source:
-    - D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*
-    - D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*
+  source: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*
 
 # registration/stitching parameters
 registration:
   invert_x_coordinates: True
   fix_missing_rotation: False
-  flatfield_quantile: 0.95
+  #flatfield_quantile: 0.95
   normalisation: False
-  filter_foreground: True
+  filter_foreground: False
   use_orthogonal_pairs: True
   use_rotation: False
   reg_channel: 0
