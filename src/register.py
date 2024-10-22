@@ -399,13 +399,18 @@ def run_stitch(input, target, params):
     if len(mvsr_logger.handlers) == 0:
         mvsr_logger.addHandler(logging.StreamHandler())
 
-    print('Initialising tiles...')
     if isinstance(input, list):
         filenames = input
         file_indices = list(range(len(filenames)))
     else:
         filenames = dir_regex(input)
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
+
+    if len(filenames) <= 1:
+        print('Skipping #tiles <= 1')
+        return
+
+    print('Initialising tiles...')
     sims = init_sims(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
                      is_fix_missing_rotation=is_fix_missing_rotation)
 
@@ -514,15 +519,21 @@ def run(params):
     print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
     sources = ensure_list(params['input']['source'])
+    break_on_error = params['output']['break_on_error']
 
     for source in sources:
         print('Source:', source)
-        source_dir = os.path.dirname(source)
-        target = os.path.join(source_dir, params['output']['target'])
-        target_dir = os.path.dirname(target)
-        if not os.path.exists(target_dir):
-            os.makedirs(target_dir)
-        run_stitch(source, target, params)
+        try:
+            source_dir = os.path.dirname(source)
+            target = os.path.join(source_dir, params['output']['target'])
+            target_dir = os.path.dirname(target)
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir)
+            run_stitch(source, target, params)
+        except Exception as e:
+            print(f'Error: {e}')
+            if break_on_error:
+                break
 
     print('Done!')
     print()

@@ -26,7 +26,7 @@ output:
   # overwrite - overwrite existing files in output folder
   overwrite: True
   # break_on_error - stop processing when error occurs
-  break_on_error: True
+  break_on_error: False
   # tile_size - size for optional tiling
   tile_size: []
   # compression - optional compression format/level
