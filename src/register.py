@@ -69,6 +69,8 @@ def init_sims(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix
         size = np.array(source0.get_size()) * source0.get_pixel_size_micrometer()
         translations = fix_missing_rotation(translations, size)
 
+    #translations = [np.array(translation) * 1.25 for translation in translations]
+
     for source, image, translation in zip(sources, images, translations):
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
@@ -319,7 +321,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     return mappings_dict, score, msims0, fused_image
 
 
-def save_image(filename, data, transform_key=None, channels=None, positions=None, npyramid_add=4, pyramid_downsample=2):
+def save_image(filename, data, transform_key=None, channels=None, positions=None,
+               npyramid_add=4, pyramid_downsample=2, out_params={}):
     dimension_order = ''.join(data.dims)
     sdims = si_utils.get_spatial_dims_from_sim(data)
     nsdims = si_utils.get_nonspatial_dims_from_sim(data)
@@ -352,16 +355,12 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
     npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
     scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
 
-    print('writing ome-zarr')
-    progress = tqdm()
-    save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
-    progress.update()
-    progress.close()
-    print('writing ome-tiff')
-    progress = tqdm()
-    save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
-    progress.update()
-    progress.close()
+    if 'format' in out_params and 'zar' in out_params['format']:
+        print('writing ome-zarr')
+        save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
+    if 'format' in out_params and 'tif' in out_params['format']:
+        print('writing ome-tiff')
+        save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
 
 
 def dir_regex(pattern):
@@ -385,6 +384,7 @@ def run_stitch(input, target, params):
     use_rotation = reg_params.get('use_rotation', False)
     reg_channel = reg_params.get('reg_channel', 0)
 
+    show_original = out_params.get('show_original', False)
     npyramid_add = out_params.get('npyramid_add', 0)
     pyramid_downsample = out_params.get('pyramid_downsample', 2)
     channels = out_params.get('channels', [])
@@ -409,23 +409,24 @@ def run_stitch(input, target, params):
     sims = init_sims(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
                      is_fix_missing_rotation=is_fix_missing_rotation)
 
-    # before registration:
-    print('Fusing original...')
-    original_fused = fusion.fuse(
-        sims,
-        transform_key='stage_metadata'
-    )
+    if show_original:
+        # before registration:
+        print('Fusing original...')
+        original_fused = fusion.fuse(
+            sims,
+            transform_key='stage_metadata'
+        )
 
-    # plot the tile configuration
-    print('Plotting tiles...')
-    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-    vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
-                             view_labels=file_indices, view_labels_size=3,
-                             show_plot=False, output_filename=original_positions_filename)
+        # plot the tile configuration
+        print('Plotting tiles...')
+        msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
+        vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+                                 view_labels=file_indices, view_labels_size=3,
+                                 show_plot=False, output_filename=original_positions_filename)
 
-    print('Saving fused image...')
-    save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
-               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
+        print('Saving fused image...')
+        save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
+                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
     mappings, score, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
@@ -444,7 +445,7 @@ def run_stitch(input, target, params):
     print('Saving fused image...')
     positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
     save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions,
-               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample)
+               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
 
 def run_stitch_overlay():

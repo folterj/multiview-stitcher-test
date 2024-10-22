@@ -4,13 +4,32 @@ input:
   source:
     - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section4/.*.ome.tif
     - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section5/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section6/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section7/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section8/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section9/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section10/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section11/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section12/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section13/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section14/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section15/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section16/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section17/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section18/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section19/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section20/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section21/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section22/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section23/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section24/.*.ome.tif
 
 # registration/stitching parameters
 registration:
   invert_x_coordinates: False
   fix_missing_rotation: True
   #flatfield_quantile: 0.95
-  normalisation: True
+  normalisation: False
   filter_foreground: False
   use_orthogonal_pairs: True
   use_rotation: False
@@ -18,6 +37,8 @@ registration:
 
 # output parameters
 output:
+  # show original un-registered output
+  show_original: True
   # target - output base path
   target: stitched/stitched_
   # format - output image format(s)
@@ -31,7 +52,7 @@ output:
   # compression - optional compression format/level
   compression: []
   # npyramid_add - number of pyramid size levels to add
-  npyramid_add: 3
+  npyramid_add: 4
   # pyramid_downsample - factor each pyramid level is down-sampled
   pyramid_downsample: 2
   # extra channel metadata (e.g. used for combine operation)

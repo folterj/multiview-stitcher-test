@@ -17,6 +17,8 @@ registration:
 
 # output parameters
 output:
+  # show original un-registered output
+  show_original: True
   # target - output base path
   target: stitched/stitched_
   # format - output image format(s)
@@ -30,7 +32,7 @@ output:
   # compression - optional compression format/level
   compression: []
   # npyramid_add - number of pyramid size levels to add
-  npyramid_add: 3
+  npyramid_add: 4
   # pyramid_downsample - factor each pyramid level is down-sampled
   pyramid_downsample: 2
   # extra channel metadata (e.g. used for combine operation)
