@@ -167,7 +167,7 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
 
 
 def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False, channels=[]):
+             use_orthogonal_pairs=False, use_rotation=False, channels=[], verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
@@ -183,14 +183,16 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
 
     if filter_foreground:
-        print('Filtering foreground tiles...')
+        if verbose:
+            print('Filtering foreground tiles...')
         tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
         threshold = np.median(tile_vars)    # using median by definition 50% of the tiles
         foregrounds = (tile_vars > threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
         #threshold, foregrounds = filter_noise_images(sims)
         #foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
-        print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
+        if verbose:
+            print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
         for msim0, msim in zip (msims0, msims):
@@ -211,8 +213,9 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         indices = range(len(msims))
         register_msims = msims
 
-    print('Registering...')
-    progress = tqdm()
+    if verbose:
+        print('Registering...')
+        progress = tqdm()
 
     if use_orthogonal_pairs:
         register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
@@ -274,8 +277,9 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
                 plot_summary=True
             )
 
-    progress.update()
-    progress.close()
+    if verbose:
+        progress.update()
+        progress.close()
     mappings_dict = {int(index): mapping.data[0].tolist() for index, mapping in zip(indices, mappings)}
     distances = [np.linalg.norm(apply_transform([(0, 0)], np.array(mapping))[0]) for mapping in mappings_dict.values()]
 
@@ -296,7 +300,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
             msi_utils.get_transform_from_msim(msim, transform_key='registered'),
             transform_key='registered')
 
-    print('Fusing...')
+    if verbose:
+        print('Fusing...')
     # convert to multichannel images
     sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
     if is_channel_overlay:
@@ -353,10 +358,8 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
     scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
 
     if 'format' in out_params and 'zar' in out_params['format']:
-        print('writing ome-zarr')
         save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
     if 'format' in out_params and 'tif' in out_params['format']:
-        print('writing ome-tiff')
         save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
 
 
@@ -380,6 +383,7 @@ def run_stitch(input, target, params):
     is_fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
     use_rotation = reg_params.get('use_rotation', False)
     reg_channel = reg_params.get('reg_channel', 0)
+    verbose = reg_params.get('verbose', False)
 
     show_original = out_params.get('show_original', False)
     npyramid_add = out_params.get('npyramid_add', 0)
@@ -391,10 +395,12 @@ def run_stitch(input, target, params):
     registered_positions_filename = target + 'positions_registered.png'
     registered_fused_filename = target + 'registered'
 
-    mvsr_logger = logging.getLogger('multiview_stitcher.registration')
-    mvsr_logger.setLevel(logging.INFO)
-    if len(mvsr_logger.handlers) == 0:
-        mvsr_logger.addHandler(logging.StreamHandler())
+    if verbose:
+        # expose multiview_stitcher.registration logger and make more verbose
+        mvsr_logger = logging.getLogger('multiview_stitcher.registration')
+        mvsr_logger.setLevel(logging.INFO)
+        if len(mvsr_logger.handlers) == 0:
+            mvsr_logger.addHandler(logging.StreamHandler())
 
     if isinstance(input, list):
         filenames = input
@@ -404,47 +410,55 @@ def run_stitch(input, target, params):
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
     if len(filenames) <= 1:
-        print('Skipping #tiles <= 1')
+        if verbose:
+            print('Skipping #tiles <= 1')
         return
 
-    print('Initialising tiles...')
+    if verbose:
+        print('Initialising tiles...')
     sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
                       is_fix_missing_rotation=is_fix_missing_rotation)
 
     if show_original:
         # before registration:
-        print('Fusing original...')
+        if verbose:
+            print('Fusing original...')
         original_fused = fusion.fuse(
             sims,
             transform_key='stage_metadata'
         )
 
         # plot the tile configuration
-        print('Plotting tiles...')
+        if verbose:
+            print('Plotting tiles...')
         msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
         vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
                                  view_labels=file_indices, view_labels_size=3,
                                  show_plot=False, output_filename=original_positions_filename)
 
-        print('Saving fused image...')
+        if verbose:
+            print('Saving fused image...')
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
     mappings, score, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
-                 use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation))
-    print(f'Score: {score:.3f}')
+                 use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, verbose=verbose))
+    if verbose:
+        print(f'Score: {score:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(target + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
 
     # plot the tile configuration after registration
-    print('Plotting tiles...')
+    if verbose:
+        print('Plotting tiles...')
     vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=registered_positions_filename)
 
-    print('Saving fused image...')
+    if verbose:
+        print('Saving fused image...')
     positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
     save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions,
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
@@ -518,7 +532,7 @@ def run(params):
     sources = ensure_list(params['input']['source'])
     break_on_error = params['output']['break_on_error']
 
-    for source in sources:
+    for source in tqdm(sources):
         print('Source:', source)
         try:
             source_dir = os.path.dirname(source)

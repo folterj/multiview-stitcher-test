@@ -13,6 +13,7 @@ registration:
   use_orthogonal_pairs: True
   use_rotation: False
   reg_channel: 0
+  verbose: True
 
 # output parameters
 output:
