@@ -1,6 +1,7 @@
 # https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
 # https://github.com/pydata/xarray/issues/8828
 
+from contextlib import nullcontext
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -34,12 +35,13 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False):
+def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False,
+               verbose=False):
     sims = []
     sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
     images = []
-    for source in tqdm(sources):
+    for source in tqdm(sources, disable=not verbose):
         output_order = 'yx'
         if source.get_nchannels() > 1:
             output_order += 'c'
@@ -225,7 +227,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
     else:
         pairs = None
-    with ProgressBar():
+    with ProgressBar() if verbose else nullcontext():
         if use_rotation:
             # phase shift registration
             mappings1 = registration.register(
@@ -288,11 +290,11 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
         size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
         norm_distance = np.sum(distances) / np.linalg.norm(size)
-        score = 1 - min(math.sqrt(norm_distance), 1)
+        confidence = 1 - min(math.sqrt(norm_distance), 1)
     else:
         # Coefficient of variation
         cv = np.std(distances) / np.mean(distances)
-        score = 1 - min(cv / 10, 1)
+        confidence = 1 - min(cv / 10, 1)
 
     for msim, msim0 in zip(msims, msims0):
         msi_utils.set_affine_transform(
@@ -320,7 +322,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
             sims0,
             transform_key="registered"
         )
-    return mappings_dict, score, msims0, fused_image
+    return mappings_dict, confidence, msims0, fused_image
 
 
 def save_image(filename, data, transform_key=None, channels=None, positions=None,
@@ -417,7 +419,7 @@ def run_stitch(input, target, params):
     if verbose:
         print('Initialising tiles...')
     sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
-                      is_fix_missing_rotation=is_fix_missing_rotation)
+                      is_fix_missing_rotation=is_fix_missing_rotation, verbose=verbose)
 
     if show_original:
         # before registration:
@@ -441,11 +443,11 @@ def run_stitch(input, target, params):
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
-    mappings, score, msims, registered_fused = (
+    mappings, confidence, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                  use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, verbose=verbose))
-    if verbose:
-        print(f'Score: {score:.3f}')
+    # TODO: write confidence to file?
+    print(f'Confidence: {confidence:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(target + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
@@ -477,9 +479,9 @@ def run_stitch_overlay():
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     sims1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    mappings1, score, msims1, registered_fused1 = (
+    mappings1, confidence, msims1, registered_fused1 = (
         register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True))
-    print(f'Score: {score:.3f}')
+    print(f'Confidence: {confidence:.3f}')
 
     print('Plotting tiles...')
     vis_utils.plot_positions(msims1, transform_key='registered', use_positional_colors=False,
@@ -493,9 +495,9 @@ def run_stitch_overlay():
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
     sims2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
-    mappings2, score, msims2, registered_fused2 = (
+    mappings2, confidence, msims2, registered_fused2 = (
         register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True))
-    print(f'Score: {score:.3f}')
+    print(f'Confidence: {confidence:.3f}')
 
     print('Plotting tiles...')
     vis_utils.plot_positions(msims2, transform_key='registered', use_positional_colors=False,
@@ -510,10 +512,10 @@ def run_stitch_overlay():
         si_utils.set_sim_affine(sim,
                                 param_utils.identity_transform(ndim=2, t_coords=[0]),
                                 transform_key='stage_metadata')
-    mappings, score, msims, registered_fused =(
+    mappings, confidence, msims, registered_fused =(
         register(sims, 0, normalisation=True, filter_foreground=False, use_orthogonal_pairs=False,
                  channels=channels))
-    print(f'Score: {score:.3f}')
+    print(f'Confidence: {confidence:.3f}')
 
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)

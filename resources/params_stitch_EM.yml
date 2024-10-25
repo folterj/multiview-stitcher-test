@@ -18,7 +18,7 @@ registration:
 # output parameters
 output:
   # show original un-registered output
-  show_original: True
+  show_original: False
   # target - output base path
   target: stitched/stitched_
   # format - output image format(s)

@@ -1,0 +1,89 @@
+# input parameters
+input:
+  # source - input folder or URL (pattern or list supported)
+  source:
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section4/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section5/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section6/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section7/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section8/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section9/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section10/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section11/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section12/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section13/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section14/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section15/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section16/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section17/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section18/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section19/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section20/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section21/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section22/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section23/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section24/.*.ome.tif
+
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section1/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section2/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section3/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section4/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section5/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section6/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section7/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section8/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section9/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section10/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section11/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section12/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section13/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section14/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section15/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section16/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section17/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section18/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section19/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section20/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section21/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section22/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section23/.*.ome.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section24/.*.ome.tif
+
+# registration/stitching parameters
+registration:
+  invert_x_coordinates: False
+  fix_missing_rotation: True
+  #flatfield_quantile: 0.95
+  normalisation: False
+  filter_foreground: False
+  use_orthogonal_pairs: True
+  use_rotation: False
+  reg_channel: 0
+
+# output parameters
+output:
+  # show original un-registered output
+  show_original: True
+  # target - output base path
+  target: stitched/stitched_
+  # format - output image format(s)
+  format: ome.zarr, ome.tiff
+  # overwrite - overwrite existing files in output folder
+  overwrite: True
+  # break_on_error - stop processing when error occurs
+  break_on_error: False
+  # tile_size - size for optional tiling
+  tile_size: []
+  # compression - optional compression format/level
+  compression: []
+  # npyramid_add - number of pyramid size levels to add
+  npyramid_add: 4
+  # pyramid_downsample - factor each pyramid level is down-sampled
+  pyramid_downsample: 2
+  # extra channel metadata (e.g. used for combine operation)
+  extra_metadata: {'channels': [{'label':reflection, 'color':[1, 1, 1, 1]}, {'label':fluorescence, 'color':[0, 1, 0, 1]}]}
+
+# logging parameters
+log:
+  filename: log/multiview-stitcher-test.log
+  log_format: '%(asctime)s %(levelname)s: %(message)s'

@@ -1,18 +1,19 @@
 # input parameters
 input:
   # source - input folder or URL (pattern or list supported)
-  source: D:/slides/EM04788_02_Sub_02/Section24/.*.ome.tif
+  source: D:/slides/EM04788_02_Sub_02/Section5/.*.ome.tif
 
 # registration/stitching parameters
 registration:
   invert_x_coordinates: False
   fix_missing_rotation: True
   #flatfield_quantile: 0.95
-  normalisation: False
+  normalisation: True
   filter_foreground: False
   use_orthogonal_pairs: True
   use_rotation: False
   reg_channel: 0
+  verbose: False
 
 # output parameters
 output:
