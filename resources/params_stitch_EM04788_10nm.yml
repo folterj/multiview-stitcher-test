@@ -2,27 +2,27 @@
 input:
   # source - input folder or URL (pattern or list supported)
   source:
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 4/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 5/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 6/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 7/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 8/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 9/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 10/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 11/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 12/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 13/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 14/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 15/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 16/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 17/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 18/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 19/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 20/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 21/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 22/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 23/.*_t\d{4}.*.tif
-    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/Section 24/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 4/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 5/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 6/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 7/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 8/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 9/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 10/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 11/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 12/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 13/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 14/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 15/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 16/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 17/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 18/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 19/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 20/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 21/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 22/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 23/.*_t\d{4}.*.tif
+    - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/10 nm pixel/section 24/.*_t\d{4}.*.tif
 
     - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section1/.*_t\d{4}.*.tif
     - /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section2/.*_t\d{4}.*.tif
