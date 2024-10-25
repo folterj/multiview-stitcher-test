@@ -1,7 +1,7 @@
 # input parameters
 input:
   # source - input folder or URL (pattern or list supported)
-  source: D:/slides/EM04788_02_Sub_02/Section5/.*.ome.tif
+  source: D:/slides/EM04788_02_Sub_02/Section5/.*_t\d{4}.*.tif
 
 # registration/stitching parameters
 registration:

@@ -365,14 +365,6 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
         save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
 
 
-def dir_regex(pattern):
-    dir = os.path.dirname(pattern)
-    file_pattern = os.path.basename(pattern)
-    files = [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
-    files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
-    return files_sorted
-
-
 def run_stitch(input, target, params):
     reg_params = params['registration']
     out_params = params['output']
@@ -537,7 +529,7 @@ def run(params):
     for source in tqdm(sources):
         print('Source:', source)
         try:
-            source_dir = os.path.dirname(source)
+            source_dir, _ = split_path(source)
             target = os.path.join(source_dir, params['output']['target'])
             target_dir = os.path.dirname(target)
             if not os.path.exists(target_dir):

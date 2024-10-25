@@ -124,6 +124,19 @@ def get_filetitle(filename: str) -> str:
     return title
 
 
+def split_path(path):
+    # split path including regexes
+    index = path.rfind('/')
+    return path[:index], path[index + 1:]
+
+
+def dir_regex(pattern):
+    dir, file_pattern = split_path(pattern)
+    files = [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
+    files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
+    return files_sorted
+
+
 def find_all_numbers(text: str) -> list:
     return list(map(int, re.findall(r'\d+', text)))
 
