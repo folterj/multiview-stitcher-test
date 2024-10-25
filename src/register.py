@@ -530,11 +530,14 @@ def run(params):
         print('Source:', source)
         try:
             source_dir, _ = split_path(source)
-            target = os.path.join(source_dir, params['output']['target'])
-            target_dir = os.path.dirname(target)
-            if not os.path.exists(target_dir):
-                os.makedirs(target_dir)
-            run_stitch(source, target, params)
+            if os.path.exists(source_dir):
+                target = os.path.join(source_dir, params['output']['target'])
+                target_dir = os.path.dirname(target)
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir)
+                run_stitch(source, target, params)
+            else:
+                raise FileNotFoundError(f'Source directory not found: {source_dir}')
         except Exception as e:
             print(f'Error: {e}')
             if break_on_error:
