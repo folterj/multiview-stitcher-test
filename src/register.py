@@ -474,6 +474,8 @@ def run_stitch(input, target, params):
 
 
 def run_stitch_overlay(output_dir, verbose=False):
+    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
