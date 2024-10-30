@@ -50,7 +50,8 @@ def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fi
         images.append(image)
 
     if flatfield_quantile is not None:
-        print('Applying flatfield correction...')
+        if verbose:
+            print('Applying flatfield correction...')
         norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
         dtype = images[0].dtype
         max_image = norm_images[0]
