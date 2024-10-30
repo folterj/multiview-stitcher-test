@@ -10,4 +10,4 @@ ml purge
 ml Anaconda3
 source /camp/apps/eb/software/Anaconda/conda.env.sh
 conda activate multiview-stitcher-source-env
-python register.py
+python src/register.py
