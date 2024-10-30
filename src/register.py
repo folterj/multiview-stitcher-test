@@ -136,7 +136,7 @@ def normalise(sims, use_global=True):
             dims=sim.dims,
             scale=si_utils.get_spacing_from_sim(sim),
             translation=si_utils.get_origin_from_sim(sim),
-            transform_key=si_utils.get_tranform_keys_from_sim(sim)[0],
+            transform_key='stage_metadata',
             c_coords=sim.c
         )
         new_sims.append(new_sim)
@@ -177,7 +177,13 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     is_channel_overlay = (len(channels) > 0)
     # normalisation
     if normalisation:
-        sims = normalise(sims0, use_global=not is_channel_overlay)
+        use_global = not is_channel_overlay
+        if verbose:
+            if use_global:
+                print('Normalising tiles (global)...')
+            else:
+                print('Normalising tiles...')
+        sims = normalise(sims0, use_global=use_global)
     else:
         sims = sims0
 
@@ -225,6 +231,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         sim0 = register_sims[0]
         size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
         pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
+        if verbose:
+            print('#pairs:', len(pairs))
     else:
         pairs = None
     with ProgressBar() if verbose else nullcontext():
@@ -276,6 +284,12 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
                 pairs=pairs,
                 pre_registration_pruning_method=None,
                 pairwise_reg_func=pairwise_reg_func,
+
+                #registration_binning={dim: 1 for dim in 'yx'},
+                #groupwise_resolution_method='shortest_paths',
+
+                #post_registration_do_quality_filter=True,
+                #post_registration_quality_threshold=0.001,
                 plot_summary=True
             )
 
@@ -293,8 +307,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         confidence = 1 - min(math.sqrt(norm_distance), 1)
     else:
         # Coefficient of variation
-        cv = np.std(distances) / np.mean(distances)
-        confidence = 1 - min(cv / 10, 1)
+        cvar = np.std(distances) / np.mean(distances)
+        confidence = 1 - min(cvar / 10, 1)
 
     for msim, msim0 in zip(msims, msims0):
         msi_utils.set_affine_transform(
@@ -458,11 +472,11 @@ def run_stitch(input, target, params):
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
 
-def run_stitch_overlay():
-    output_dir = 'output'
+def run_stitch_overlay(output_dir, verbose=False):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    out_params = {'format': 'ome.zarr'}
     channels = [{'label': 'Reflection', 'color': (1, 1, 1)},
                 {'label': 'Fluorescence', 'color': (0, 1, 0)}]
 
@@ -470,9 +484,9 @@ def run_stitch_overlay():
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
-    sims1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
+    sims1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True, verbose=verbose)
     mappings1, confidence, msims1, registered_fused1 = (
-        register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True))
+        register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True, verbose=verbose))
     print(f'Confidence: {confidence:.3f}')
 
     print('Plotting tiles...')
@@ -480,7 +494,7 @@ def run_stitch_overlay():
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered1.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered')
+    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered', out_params=out_params)
 
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
@@ -488,7 +502,7 @@ def run_stitch_overlay():
     filenames = dir_regex(input)
     sims2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings2, confidence, msims2, registered_fused2 = (
-        register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True))
+        register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True, verbose=verbose))
     print(f'Confidence: {confidence:.3f}')
 
     print('Plotting tiles...')
@@ -496,17 +510,18 @@ def run_stitch_overlay():
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered2.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered')
+    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered', out_params=out_params)
 
     sims = [registered_fused1, registered_fused2]
-    # set dummy position
+    # copy position from previous registered key
     for sim in sims:
         si_utils.set_sim_affine(sim,
-                                param_utils.identity_transform(ndim=2, t_coords=[0]),
-                                transform_key='stage_metadata')
+                                param_utils.identity_transform(ndim=2),
+                                transform_key='stage_metadata',
+                                base_transform_key='registered')
     mappings, confidence, msims, registered_fused =(
         register(sims, 0, normalisation=True, filter_foreground=False, use_orthogonal_pairs=False,
-                 channels=channels))
+                 channels=channels, verbose=verbose))
     print(f'Confidence: {confidence:.3f}')
 
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
@@ -517,7 +532,7 @@ def run_stitch_overlay():
                              show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
     print('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels)
+    save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels, out_params=out_params)
 
 
 def run(params):
@@ -561,5 +576,5 @@ if __name__ == '__main__':
 
     output_dir = 'output'
 
-    run_stitch(input, output_dir)
-    #run_stitch_overlay()
+    #run_stitch(input, output_dir)
+    run_stitch_overlay(output_dir, verbose=True)
