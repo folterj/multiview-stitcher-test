@@ -25,15 +25,15 @@ from src.image.util import *
 from src.util import *
 
 
-def init_logger(params):
-    log_params = params['log']
-    verbose = params['registration'].get('verbose', False)
-
-    basepath = os.path.dirname(log_params['filename'])
+def init_logger(params_general):
+    verbose = params_general.get('verbose', False)
+    log_filename = params_general.get('log_filename', 'logfile.log')
+    log_format = params_general.get('log_format')
+    basepath = os.path.dirname(log_filename)
     if not os.path.exists(basepath):
         os.makedirs(basepath)
 
-    handlers = [logging.FileHandler(log_params['filename'], encoding='utf-8')]
+    handlers = [logging.FileHandler(log_filename, encoding='utf-8')]
     if verbose:
         handlers += [logging.StreamHandler()]
         # expose multiview_stitcher.registration logger and make more verbose
@@ -41,7 +41,7 @@ def init_logger(params):
         mvsr_logger.setLevel(logging.INFO)
         if len(mvsr_logger.handlers) == 0:
             mvsr_logger.addHandler(logging.StreamHandler())
-    logging.basicConfig(level=logging.INFO, format=log_params['log_format'], handlers=handlers, encoding='utf-8')
+    logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers, encoding='utf-8')
 
 
 def create_source(filename):
@@ -356,7 +356,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
 
 
 def save_image(filename, data, transform_key=None, channels=None, positions=None,
-               npyramid_add=4, pyramid_downsample=2, out_params={}):
+               npyramid_add=4, pyramid_downsample=2, params={}):
     dimension_order = ''.join(data.dims)
     sdims = si_utils.get_spatial_dims_from_sim(data)
     nsdims = si_utils.get_nonspatial_dims_from_sim(data)
@@ -389,37 +389,36 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
     npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
     scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
 
-    if 'format' in out_params and 'zar' in out_params['format']:
+    if 'format' in params and 'zar' in params['format']:
         logging.info('Saving OME-Zarr...')
         save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
-    if 'format' in out_params and 'tif' in out_params['format']:
+    if 'format' in params and 'tif' in params['format']:
         logging.info('Saving OME-Tiff...')
         save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
 
 
-def run_stitch(input, target, params):
-    reg_params = params['registration']
-    out_params = params['output']
+def run_operation(params, params_general):
+    input = params['input']
+    output = params['output']
+    invert_x_coordinates = params.get('invert_x_coordinates', False)
+    flatfield_quantile = params.get('flatfield_quantile')
+    normalisation = params.get('normalisation', False)
+    filter_foreground = params.get('filter_foreground', False)
+    use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
+    is_fix_missing_rotation = params.get('fix_missing_rotation', False)
+    use_rotation = params.get('use_rotation', False)
+    reg_channel = params.get('reg_channel', 0)
+    channels = params.get('extra_metadata', {}).get('channels')
 
-    invert_x_coordinates = reg_params.get('invert_x_coordinates', False)
-    flatfield_quantile = reg_params.get('flatfield_quantile')
-    normalisation = reg_params.get('normalisation', False)
-    filter_foreground = reg_params.get('filter_foreground', False)
-    use_orthogonal_pairs = reg_params.get('use_orthogonal_pairs', False)
-    is_fix_missing_rotation = reg_params.get('fix_missing_rotation', False)
-    use_rotation = reg_params.get('use_rotation', False)
-    reg_channel = reg_params.get('reg_channel', 0)
-    verbose = reg_params.get('verbose', False)
+    show_original = params_general.get('show_original', False)
+    npyramid_add = params_general.get('npyramid_add', 0)
+    pyramid_downsample = params_general.get('pyramid_downsample', 2)
+    verbose = params_general.get('verbose', False)
 
-    show_original = out_params.get('show_original', False)
-    npyramid_add = out_params.get('npyramid_add', 0)
-    pyramid_downsample = out_params.get('pyramid_downsample', 2)
-    channels = out_params.get('channels', [])
-
-    original_positions_filename = target + 'positions_original.png'
-    original_fused_filename = target + 'original'
-    registered_positions_filename = target + 'positions_registered.png'
-    registered_fused_filename = target + 'registered'
+    original_positions_filename = output + 'positions_original.png'
+    original_fused_filename = output + 'original'
+    registered_positions_filename = output + 'positions_registered.png'
+    registered_fused_filename = output + 'registered'
 
     if isinstance(input, list):
         filenames = input
@@ -453,14 +452,14 @@ def run_stitch(input, target, params):
 
         logging.info('Saving fused image...')
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
-                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
+                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params)
 
     mappings, confidence, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                  use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, verbose=verbose))
     logging.info(f'Confidence: {confidence:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
-    with open(target + 'mappings.json', 'w') as file:
+    with open(output + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
 
     # plot the tile configuration after registration
@@ -472,7 +471,7 @@ def run_stitch(input, target, params):
     logging.info('Saving fused image...')
     positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
     save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions,
-               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
+               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
 
 
 def run_stitch_overlay(output_dir, verbose=False):
@@ -499,7 +498,7 @@ def run_stitch_overlay(output_dir, verbose=False):
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered1.png'))
 
     logging.info('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered', out_params=out_params)
+    save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered', params=out_params)
 
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
     input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
@@ -515,7 +514,7 @@ def run_stitch_overlay(output_dir, verbose=False):
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered2.png'))
 
     logging.info('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered', out_params=out_params)
+    save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered', params=out_params)
 
     sims = [registered_fused1, registered_fused2]
     # copy position from previous registered key
@@ -537,27 +536,28 @@ def run_stitch_overlay(output_dir, verbose=False):
                              show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
     logging.info('Saving fused image...')
-    save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels, out_params=out_params)
+    save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels, params=out_params)
 
 
 def run(params):
     logging.info(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
-    sources = ensure_list(params['input']['source'])
-    break_on_error = params['output']['break_on_error']
+    params_general = params['general']
+    break_on_error = params_general.get('break_on_error', False)
 
-    for source in tqdm(sources):
-        logging.info('Source:', source)
+    for operation in tqdm(params['operations']):
+        input = operation['input']
+        logging.info(f'Input: {input}')
         try:
-            source_dir, _ = split_path(source)
-            if os.path.exists(source_dir):
-                target = os.path.join(source_dir, params['output']['target'])
+            input_dir, _ = split_path(ensure_list(input)[0])
+            if os.path.exists(input_dir):
+                target = os.path.join(input_dir, operation['output'])
                 target_dir = os.path.dirname(target)
                 if not os.path.exists(target_dir):
                     os.makedirs(target_dir)
-                run_stitch(source, target, params)
+                run_operation(operation, params_general)
             else:
-                raise FileNotFoundError(f'Source directory not found: {source_dir}')
+                raise FileNotFoundError(f'Input directory not found: {input_dir}')
         except Exception as e:
             logging.error(f'Error: {e}')
             if break_on_error:
@@ -582,8 +582,9 @@ if __name__ == '__main__':
 
     with open('resources/params_test.yml', 'r', encoding='utf8') as file:
         params = yaml.safe_load(file)
-    init_logger(params)
-    verbose = params['registration'].get('verbose', False)
+    params_general = params['general']
+    init_logger(params_general)
+    verbose = params_general.get('verbose', False)
 
     #run_stitch(input, output_dir)
     run_stitch_overlay(output_dir, verbose=verbose)
