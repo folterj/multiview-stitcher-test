@@ -1,7 +1,7 @@
 import dask.array as da
 import xarray as xr
 
-from src.register import save_image
+from src.registration import save_image
 
 
 if __name__ == '__main__':

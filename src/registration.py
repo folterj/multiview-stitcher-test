@@ -15,6 +15,7 @@ import re
 from ome_zarr.scale import Scaler
 from tqdm import tqdm
 import xarray as xr
+import yaml
 
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
@@ -22,6 +23,25 @@ from src.image.ome_tiff_helper import save_ome_tiff
 from src.image.ome_zarr_helper import save_ome_zarr
 from src.image.util import *
 from src.util import *
+
+
+def init_logger(params):
+    log_params = params['log']
+    verbose = params['registration'].get('verbose', False)
+
+    basepath = os.path.dirname(log_params['filename'])
+    if not os.path.exists(basepath):
+        os.makedirs(basepath)
+
+    handlers = [logging.FileHandler(log_params['filename'], encoding='utf-8')]
+    if verbose:
+        handlers += [logging.StreamHandler()]
+        # expose multiview_stitcher.registration logger and make more verbose
+        mvsr_logger = logging.getLogger('multiview_stitcher.registration')
+        mvsr_logger.setLevel(logging.INFO)
+        if len(mvsr_logger.handlers) == 0:
+            mvsr_logger.addHandler(logging.StreamHandler())
+    logging.basicConfig(level=logging.INFO, format=log_params['log_format'], handlers=handlers, encoding='utf-8')
 
 
 def create_source(filename):
@@ -41,6 +61,7 @@ def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fi
     sources = [create_source(file) for file in files]
     nchannels = sources[0].get_nchannels()
     images = []
+    logging.info('Init tiles...')
     for source in tqdm(sources, disable=not verbose):
         output_order = 'yx'
         if source.get_nchannels() > 1:
@@ -50,8 +71,7 @@ def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fi
         images.append(image)
 
     if flatfield_quantile is not None:
-        if verbose:
-            print('Applying flatfield correction...')
+        logging.info('Applying flatfield correction...')
         norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
         dtype = images[0].dtype
         max_image = norm_images[0]
@@ -179,11 +199,10 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     # normalisation
     if normalisation:
         use_global = not is_channel_overlay
-        if verbose:
-            if use_global:
-                print('Normalising tiles (global)...')
-            else:
-                print('Normalising tiles...')
+        if use_global:
+            logging.info('Normalising tiles (global)...')
+        else:
+            logging.info('Normalising tiles...')
         sims = normalise(sims0, use_global=use_global)
     else:
         sims = sims0
@@ -192,16 +211,14 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
     msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
 
     if filter_foreground:
-        if verbose:
-            print('Filtering foreground tiles...')
+        logging.info('Filtering foreground tiles...')
         tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
         threshold = np.median(tile_vars)    # using median by definition 50% of the tiles
         foregrounds = (tile_vars > threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
         #threshold, foregrounds = filter_noise_images(sims)
         #foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
-        if verbose:
-            print(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
+        logging.info(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
         for msim0, msim in zip (msims0, msims):
@@ -222,8 +239,8 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         indices = range(len(msims))
         register_msims = msims
 
+    logging.info('Registering...')
     if verbose:
-        print('Registering...')
         progress = tqdm()
 
     if use_orthogonal_pairs:
@@ -232,8 +249,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
         sim0 = register_sims[0]
         size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
         pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
-        if verbose:
-            print('#pairs:', len(pairs))
+        logging.info(f'#pairs: {len(pairs)}')
     else:
         pairs = None
     with ProgressBar() if verbose else nullcontext():
@@ -317,8 +333,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
             msi_utils.get_transform_from_msim(msim, transform_key='registered'),
             transform_key='registered')
 
-    if verbose:
-        print('Fusing...')
+    logging.info('Fusing...')
     # convert to multichannel images
     sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
     if is_channel_overlay:
@@ -375,8 +390,10 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
     scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
 
     if 'format' in out_params and 'zar' in out_params['format']:
+        logging.info('Saving OME-Zarr...')
         save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
     if 'format' in out_params and 'tif' in out_params['format']:
+        logging.info('Saving OME-Tiff...')
         save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
 
 
@@ -404,13 +421,6 @@ def run_stitch(input, target, params):
     registered_positions_filename = target + 'positions_registered.png'
     registered_fused_filename = target + 'registered'
 
-    if verbose:
-        # expose multiview_stitcher.registration logger and make more verbose
-        mvsr_logger = logging.getLogger('multiview_stitcher.registration')
-        mvsr_logger.setLevel(logging.INFO)
-        if len(mvsr_logger.handlers) == 0:
-            mvsr_logger.addHandler(logging.StreamHandler())
-
     if isinstance(input, list):
         filenames = input
         file_indices = list(range(len(filenames)))
@@ -419,62 +429,54 @@ def run_stitch(input, target, params):
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
     if len(filenames) <= 1:
-        if verbose:
-            print('Skipping #tiles <= 1')
+        logging.warning('Skipping #tiles <= 1')
         return
 
-    if verbose:
-        print('Initialising tiles...')
+    logging.info('Initialising tiles...')
     sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
                       is_fix_missing_rotation=is_fix_missing_rotation, verbose=verbose)
 
     if show_original:
         # before registration:
-        if verbose:
-            print('Fusing original...')
+        logging.info('Fusing original...')
         original_fused = fusion.fuse(
             sims,
             transform_key='stage_metadata'
         )
 
         # plot the tile configuration
-        if verbose:
-            print('Plotting tiles...')
+        logging.info('Plotting tiles...')
         msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
         vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
                                  view_labels=file_indices, view_labels_size=3,
                                  show_plot=False, output_filename=original_positions_filename)
 
-        if verbose:
-            print('Saving fused image...')
+        logging.info('Saving fused image...')
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
     mappings, confidence, msims, registered_fused = (
         register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                  use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, verbose=verbose))
-    # TODO: write confidence to file?
-    print(f'Confidence: {confidence:.3f}')
+    logging.info(f'Confidence: {confidence:.3f}')
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(target + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
 
     # plot the tile configuration after registration
-    if verbose:
-        print('Plotting tiles...')
+    logging.info('Plotting tiles...')
     vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=registered_positions_filename)
 
-    if verbose:
-        print('Saving fused image...')
+    logging.info('Saving fused image...')
     positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
     save_image(registered_fused_filename, registered_fused, transform_key='registered', positions=positions,
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, out_params=out_params)
 
 
 def run_stitch_overlay(output_dir, verbose=False):
-    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+    logging.info(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -484,35 +486,35 @@ def run_stitch_overlay(output_dir, verbose=False):
                 {'label': 'Fluorescence', 'color': (0, 1, 0)}]
 
     #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'     # 3x3 subselection
-    #input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    input = 'D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif'
     filenames = dir_regex(input)
     sims1 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True, verbose=verbose)
     mappings1, confidence, msims1, registered_fused1 = (
         register(sims1, 0, filter_foreground=True, use_orthogonal_pairs=True, verbose=verbose))
-    print(f'Confidence: {confidence:.3f}')
+    logging.info(f'Confidence: {confidence:.3f}')
 
-    print('Plotting tiles...')
+    logging.info('Plotting tiles...')
     vis_utils.plot_positions(msims1, transform_key='registered', use_positional_colors=False,
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered1.png'))
 
-    print('Saving fused image...')
+    logging.info('Saving fused image...')
     save_image(os.path.join(output_dir, 'registered1'), registered_fused1, transform_key='registered', out_params=out_params)
 
     #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*'  # 3x3 subselection
-    #input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
-    input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    input = 'D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
+    #input = '/nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif'
     filenames = dir_regex(input)
     sims2 = init_tiles(filenames, flatfield_quantile=0.95, invert_x_coordinates=True)
     mappings2, confidence, msims2, registered_fused2 = (
         register(sims2, 0, filter_foreground=True, use_orthogonal_pairs=True, verbose=verbose))
-    print(f'Confidence: {confidence:.3f}')
+    logging.info(f'Confidence: {confidence:.3f}')
 
-    print('Plotting tiles...')
+    logging.info('Plotting tiles...')
     vis_utils.plot_positions(msims2, transform_key='registered', use_positional_colors=False,
                              show_plot=False, output_filename=os.path.join(output_dir, 'tiles_registered2.png'))
 
-    print('Saving fused image...')
+    logging.info('Saving fused image...')
     save_image(os.path.join(output_dir, 'registered2'), registered_fused2, transform_key='registered', out_params=out_params)
 
     sims = [registered_fused1, registered_fused2]
@@ -525,27 +527,27 @@ def run_stitch_overlay(output_dir, verbose=False):
     mappings, confidence, msims, registered_fused =(
         register(sims, 0, normalisation=True, filter_foreground=False, use_orthogonal_pairs=False,
                  channels=channels, verbose=verbose))
-    print(f'Confidence: {confidence:.3f}')
+    logging.info(f'Confidence: {confidence:.3f}')
 
     with open(os.path.join(output_dir, 'mappings_overlay.json'), 'w') as file:
         json.dump(mappings, file, indent=4)
 
-    print('Plotting overlay...')
+    logging.info('Plotting overlay...')
     vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
                              show_plot=False, output_filename=os.path.join(output_dir, 'overlay_registered.png'))
 
-    print('Saving fused image...')
+    logging.info('Saving fused image...')
     save_image(os.path.join(output_dir, 'registered'), registered_fused, transform_key='registered', channels=channels, out_params=out_params)
 
 
 def run(params):
-    print(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+    logging.info(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
     sources = ensure_list(params['input']['source'])
     break_on_error = params['output']['break_on_error']
 
     for source in tqdm(sources):
-        print('Source:', source)
+        logging.info('Source:', source)
         try:
             source_dir, _ = split_path(source)
             if os.path.exists(source_dir):
@@ -557,12 +559,11 @@ def run(params):
             else:
                 raise FileNotFoundError(f'Source directory not found: {source_dir}')
         except Exception as e:
-            print(f'Error: {e}')
+            logging.error(f'Error: {e}')
             if break_on_error:
                 break
 
-    print('Done!')
-    print()
+    logging.info('Done!')
 
 
 if __name__ == '__main__':
@@ -579,5 +580,10 @@ if __name__ == '__main__':
 
     output_dir = 'output'
 
+    with open('resources/params_test.yml', 'r', encoding='utf8') as file:
+        params = yaml.safe_load(file)
+    init_logger(params)
+    verbose = params['registration'].get('verbose', False)
+
     #run_stitch(input, output_dir)
-    run_stitch_overlay(output_dir, verbose=True)
+    run_stitch_overlay(output_dir, verbose=verbose)

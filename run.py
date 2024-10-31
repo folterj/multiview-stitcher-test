@@ -1,7 +1,7 @@
 import argparse
 import yaml
 
-from src.register import run
+from src.registration import init_logger, run
 
 
 if __name__ == '__main__':
@@ -14,4 +14,5 @@ if __name__ == '__main__':
     with open(args.params, 'r', encoding='utf8') as file:
         params = yaml.safe_load(file)
 
+    init_logger(params)
     run(params)

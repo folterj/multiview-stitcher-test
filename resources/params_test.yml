@@ -1,0 +1,11 @@
+registration:
+  verbose: True
+
+output:
+  show_original: True
+  format: ome.zarr, ome.tiff
+  break_on_error: False
+
+log:
+  filename: log/multiview-stitcher-test.log
+  log_format: '%(asctime)s %(levelname)s: %(message)s'
