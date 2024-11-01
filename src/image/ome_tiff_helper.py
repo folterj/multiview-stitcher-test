@@ -1,5 +1,6 @@
 from tifffile import TiffWriter
 
+from src.image.color_conversion import rgba_to_int
 from src.util import *
 
 

@@ -1,9 +1,9 @@
 general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
-  show_original: True
+  show_original: False
   break_on_error: True
-  verbose: True
+  verbose: False
   output:
     format: ome.zarr, ome.tiff
     tile_size: []
@@ -13,33 +13,29 @@ general:
 
 operations:
   - register:
-    input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*
-    #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif
-    #input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif
+    input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/.*.ome.tif
     flatfield_quantile: 0.95
     invert_x_coordinates: True
     filter_foreground: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: D:/slides/EM04768_01_substrate_04/Reflection/
+    output: stitched/
 
   - register:
-    input: D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/tiles_1_MMStack_New Grid 1-Grid_(?!0_0.ome.tif).*
-    #input: D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif
-    #input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif
+    input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif
     flatfield_quantile: 0.95
     invert_x_coordinates: True
     filter_foreground: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: D:/slides/EM04768_01_substrate_04/Fluorescence/
+    output: stitched/
 
   - register:
     input:
-      - D:/slides/EM04768_01_substrate_04/Reflection/registered.ome.zarr
-      - D:/slides/EM04768_01_substrate_04/Fluorescence/registered.ome.zarr
+      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/stitched/registered.ome.zarr
+      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/stitched/registered.ome.zarr
     normalisation: True
     method: ANTsPy
     channel: 0
     extra_metadata: {'channels': [{'label':reflection, 'color':[1, 1, 1, 1]}, {'label':fluorescence, 'color':[0, 1, 0, 1]}]}
-    output: D:/slides/EM04768_01_substrate_04/registered/
+    output: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/
