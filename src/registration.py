@@ -292,10 +292,11 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
             mappings = mappings2
             df = df2
         else:
-            if 'ant' in method.lower():
+            if 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
             else:
                 pairwise_reg_func = registration.phase_correlation_registration
+            logging.info(f'Registration method: {pairwise_reg_func.__name__}')
             mappings, df = registration.register(
                 register_msims,
                 reg_channel=reg_channel,
@@ -411,7 +412,7 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
 def run_operation(params, params_general):
     input = params['input']
     output_params = params_general.get('output', {})
-    method = params.get('method')
+    method = params.get('method', '').lower()
     invert_x_coordinates = params.get('invert_x_coordinates', False)
     flatfield_quantile = params.get('flatfield_quantile')
     normalisation = params.get('normalisation', False)
@@ -419,7 +420,7 @@ def run_operation(params, params_general):
     use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
     is_fix_missing_rotation = params.get('fix_missing_rotation', False)
     use_rotation = params.get('use_rotation', False)
-    reg_channel = params.get('reg_channel', 0)
+    reg_channel = params.get('channel', 0)
     channels = params.get('extra_metadata', {}).get('channels', [])
 
     show_original = params_general.get('show_original', False)

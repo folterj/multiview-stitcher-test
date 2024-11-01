@@ -3,7 +3,7 @@ general:
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
   break_on_error: True
-  verbose: False
+  verbose: True
   output:
     format: ome.zarr, ome.tiff
     tile_size: []

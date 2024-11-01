@@ -1,0 +1,21 @@
+general:
+  log_filename: log/multiview-stitcher-test.log
+  log_format: '%(asctime)s %(levelname)s: %(message)s'
+  show_original: False
+  break_on_error: True
+  verbose: False
+  output:
+    format: ome.zarr
+    tile_size: []
+    compression: []
+    npyramid_add: 4
+    pyramid_downsample: 2
+
+operations:
+  - register:
+    input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section5/.*_t\d{4}.*.tif
+    normalisation: True
+    fix_missing_rotation: True
+    use_orthogonal_pairs: True
+    method: phase_correlation
+    output: stitched/
