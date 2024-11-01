@@ -190,7 +190,7 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     return pairs, angles
 
 
-def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
+def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, channels=[], verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
@@ -292,7 +292,7 @@ def register(sims0, reg_channel=None, reg_channel_index=None, normalisation=Fals
             mappings = mappings2
             df = df2
         else:
-            if is_channel_overlay:
+            if 'ant' in method.lower():
                 pairwise_reg_func = registration.registration_ANTsPy
             else:
                 pairwise_reg_func = registration.phase_correlation_registration
@@ -410,8 +410,8 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
 
 def run_operation(params, params_general):
     input = params['input']
-    output = params['output']
     output_params = params_general.get('output', {})
+    method = params.get('method')
     invert_x_coordinates = params.get('invert_x_coordinates', False)
     flatfield_quantile = params.get('flatfield_quantile')
     normalisation = params.get('normalisation', False)
@@ -427,11 +427,6 @@ def run_operation(params, params_general):
     pyramid_downsample = params_general.get('pyramid_downsample', 2)
     verbose = params_general.get('verbose', False)
 
-    original_positions_filename = output + 'positions_original.png'
-    original_fused_filename = output + 'original'
-    registered_positions_filename = output + 'positions_registered.png'
-    registered_fused_filename = output + 'registered'
-
     if isinstance(input, list):
         filenames = input
         file_indices = list(range(len(filenames)))
@@ -442,6 +437,17 @@ def run_operation(params, params_general):
     if len(filenames) <= 1:
         logging.warning('Skipping #tiles <= 1')
         return
+
+    input_dir, _ = split_path(ensure_list(input)[0])
+    output = os.path.join(input_dir, params['output'])
+    output_dir = os.path.dirname(output)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    original_positions_filename = output + 'positions_original.png'
+    original_fused_filename = output + 'original'
+    registered_positions_filename = output + 'positions_registered.png'
+    registered_fused_filename = output + 'registered'
 
     logging.info('Initialising tiles...')
     sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
@@ -466,7 +472,7 @@ def run_operation(params, params_general):
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
-    results = register(sims, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
+    results = register(sims, method, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                        use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, channels=channels,
                        verbose=verbose)
     logging.info(f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}')
@@ -500,10 +506,6 @@ def run(params):
         try:
             input_dir, _ = split_path(ensure_list(input)[0])
             if os.path.exists(input_dir):
-                target = os.path.join(input_dir, operation['output'])
-                target_dir = os.path.dirname(target)
-                if not os.path.exists(target_dir):
-                    os.makedirs(target_dir)
                 run_operation(operation, params_general)
             else:
                 raise FileNotFoundError(f'Input directory not found: {input_dir}')

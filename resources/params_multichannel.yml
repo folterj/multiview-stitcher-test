@@ -19,7 +19,7 @@ operations:
     filter_foreground: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/reflection_stitched/
 
   - register:
     input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/.*.ome.tif
@@ -28,12 +28,12 @@ operations:
     filter_foreground: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/fluorescence_stitched/
 
   - register:
     input:
-      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/stitched/registered.ome.zarr
-      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/stitched/registered.ome.zarr
+      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/reflection_stitched/registered.ome.zarr
+      - /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/fluorescence_stitched/registered.ome.zarr
     normalisation: True
     method: ANTsPy
     channel: 0
