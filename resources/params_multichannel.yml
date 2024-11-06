@@ -17,6 +17,7 @@ operations:
     flatfield_quantile: 0.95
     invert_x_coordinates: True
     filter_foreground: True
+    normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/reflection_stitched/
@@ -26,6 +27,7 @@ operations:
     flatfield_quantile: 0.95
     invert_x_coordinates: True
     filter_foreground: True
+    normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/registered/fluorescence_stitched/

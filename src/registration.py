@@ -297,6 +297,9 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
             else:
                 pairwise_reg_func = registration.phase_correlation_registration
             logging.info(f'Registration method: {pairwise_reg_func.__name__}')
+
+            #abs_tol = 5 * np.max([np.max(si_utils.get_spacing_from_sim(sim, asarray=True)) for sim in sims])
+
             mappings, df = registration.register(
                 register_msims,
                 reg_channel=reg_channel,
@@ -310,8 +313,15 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
                 #registration_binning={dim: 1 for dim in 'yx'},
                 #groupwise_resolution_method='shortest_paths',
 
-                #post_registration_do_quality_filter=True,
-                #post_registration_quality_threshold=0.001,
+                #groupwise_resolution_kwargs={
+                #    'transform': 'translation',
+                #    'max_residual_max_mean_ratio': 3.,
+                #    'abs_tol': abs_tol,
+                #},
+
+                post_registration_do_quality_filter=True,
+                post_registration_quality_threshold=0.1,
+
                 plot_summary=True,
                 return_metrics=True
             )
