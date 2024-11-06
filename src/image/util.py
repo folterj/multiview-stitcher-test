@@ -501,9 +501,10 @@ def create_normalisation_images(images, quantiles, nchannels=1):
         median_image = calc_images_median(channel_images)
         difs = [np.mean(np.abs(image.astype(np.float32) - median_image.astype(np.float32)), (0, 1)) for image in images]
         threshold = np.mean(difs, 0)
-        back_images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
+        #threshold, _ = cv.threshold(np.array(difs).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
         #threshold, foregrounds = filter_noise_images(channel_images)
         #back_images = [image for image, foreground in zip(images, foregrounds) if not foreground]
+        back_images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
         norm_images = calc_images_quantiles(back_images, quantiles)
         channel_images2.append(norm_images)
 

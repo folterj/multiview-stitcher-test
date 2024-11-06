@@ -15,7 +15,6 @@ import re
 from ome_zarr.scale import Scaler
 from tqdm import tqdm
 import xarray as xr
-import yaml
 
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
@@ -214,11 +213,12 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
     if filter_foreground:
         logging.info('Filtering foreground tiles...')
         tile_vars = [np.asarray(np.std(sim)).item() for sim in sims]
-        threshold = np.median(tile_vars)    # using median by definition 50% of the tiles
-        foregrounds = (tile_vars > threshold)
+        threshold1 = np.mean(tile_vars)
+        threshold2 = np.median(tile_vars)
+        threshold3, _ = cv.threshold(np.array(tile_vars).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
+        threshold = min(threshold1, threshold2, threshold3)
+        foregrounds = (tile_vars >= threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
-        #threshold, foregrounds = filter_noise_images(sims)
-        #foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
         logging.info(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
