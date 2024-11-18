@@ -2,24 +2,25 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
-  output_format: ome.zarr, ome.tiff
-  output_tile_size: []
-  output_compression: []
-  output_npyramid_add: 4
-  output_pyramid_downsample: 2
   break_on_error: False
   verbose: True
+  output:
+    format: ome.zarr
+    tile_size: []
+    compression: []
+    npyramid_add: 4
+    pyramid_downsample: 2
 
 operations:
   - register:
-    input: D:/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif
+    input: C:/Project/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif
     invert_x_coordinates: False
     fix_missing_rotation: True
     #flatfield_quantile: 0.95
-    normalisation: False
+    normalisation: True
     filter_foreground: False
     use_orthogonal_pairs: True
     use_rotation: False
     channel: 0
     method: phase_correlation
-    output: stitched/stitched_
+    output: stitched/

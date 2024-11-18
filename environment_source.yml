@@ -3,7 +3,7 @@ channels:
  - conda-forge
  - defaults
 dependencies:
- - python=3.10
+ - python=3.12
  - numpy
  - scipy
  - scikit-image
@@ -16,7 +16,7 @@ dependencies:
  - tqdm
  - pip
  - pip:
-   - git+https://github.com/multiview-stitcher/multiview-stitcher.git
+   - git+https://github.com/multiview-stitcher/multiview-stitcher.git@improve_global_opt
    - opencv-python
    - spatial-image
    - multiscale-spatial-image
