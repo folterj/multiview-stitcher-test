@@ -447,8 +447,8 @@ def run_operation(params, params_general):
         filenames = dir_regex(input)
         file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
-    if len(filenames) <= 1:
-        logging.warning('Skipping #tiles <= 1')
+    if len(filenames) == 0:
+        logging.warning('Skipping (no tiles)')
         return
 
     input_dir, _ = split_path(ensure_list(input)[0])
@@ -459,7 +459,6 @@ def run_operation(params, params_general):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-
     original_positions_filename = output + 'positions_original.png'
     original_fused_filename = output + 'original'
     registered_positions_filename = output + 'positions_registered.png'
@@ -468,6 +467,12 @@ def run_operation(params, params_general):
     logging.info('Initialising tiles...')
     sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
                       is_fix_missing_rotation=is_fix_missing_rotation, verbose=verbose)
+
+    if len(filenames) == 1:
+        logging.warning('Skipping registration (single tile)')
+        save_image(registered_fused_filename, sims[0], channels=channels,
+                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
+        return
 
     if show_original:
         # before registration:
