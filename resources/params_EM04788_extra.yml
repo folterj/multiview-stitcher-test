@@ -29,3 +29,27 @@ operations:
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
+
+  - register:
+    input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section21/.*_t\d{4}.*.tif
+    fix_missing_rotation: True
+    normalisation: True
+    use_orthogonal_pairs: True
+    method: phase_correlation
+    output: stitched/
+
+  - register:
+    input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section22/.*_t\d{4}.*.tif
+    fix_missing_rotation: True
+    normalisation: True
+    use_orthogonal_pairs: True
+    method: phase_correlation
+    output: stitched/
+
+  - register:
+    input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section23/.*_t\d{4}.*.tif
+    fix_missing_rotation: True
+    normalisation: True
+    use_orthogonal_pairs: True
+    method: phase_correlation
+    output: stitched/
