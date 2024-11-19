@@ -10,4 +10,7 @@ ml purge
 ml Anaconda3
 source /camp/apps/eb/software/Anaconda/conda.env.sh
 conda activate multiview-stitcher-source-env
-python run.py --params=resources/params_EM04788_20nm.yml
+python run.py --params=resources/params_EM04788_02_Sub_02_10nm.yml
+python run.py --params=resources/params_EM04788_02_Sub_02_20nm.yml
+python run.py --params=resources/params_EM04788_03_Sub_01_10nm.yml
+python run.py --params=resources/params_EM04788_03_Sub_01_20nm.yml
