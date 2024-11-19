@@ -2,7 +2,7 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
-  break_on_error: True
+  break_on_error: False
   verbose: False
   output:
     clear: True

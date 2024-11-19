@@ -525,8 +525,9 @@ def run(params):
                 run_operation(operation, params_general)
             else:
                 raise FileNotFoundError(f'Input directory not found: {input_dir}')
-        except Exception:
+        except Exception as e:
             logging.exception(f'Error processing: {input}')
+            print(f'Error processing: {input}: {e}')
             if break_on_error:
                 break
 
