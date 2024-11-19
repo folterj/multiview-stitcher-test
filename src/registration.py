@@ -9,6 +9,7 @@ import math
 import multiview_stitcher
 from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
+from multiview_stitcher.mv_graph import NotEnoughOverlapError
 import numpy as np
 import os
 from ome_zarr.scale import Scaler
@@ -255,102 +256,116 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
     else:
         pairs = None
     with ProgressBar() if verbose else nullcontext():
-        if use_rotation:
-            # phase shift registration
-            mappings1, df1 = registration.register(
-                register_msims,
-                reg_channel=reg_channel,
-                reg_channel_index=reg_channel_index,
-                transform_key='stage_metadata',
-                new_transform_key='translation_registered',
-                pairs=pairs,
-                pre_registration_pruning_method=None,
-                groupwise_resolution_kwargs={
-                    'transform': 'translation',
-                },
-                plot_summary=True,
-                return_metrics=True
-            )
-            # affine registration
-            mappings2, df2 = registration.register(
-                register_msims,
-                reg_channel=reg_channel,
-                reg_channel_index=reg_channel_index,
-                transform_key='translation_registered',
-                new_transform_key='registered',
-                pairs=pairs,
-                pre_registration_pruning_method=None,
-                pairwise_reg_func=registration.registration_ANTsPy,
-                pairwise_reg_func_kwargs={
-                    'transform_types': ['Rigid'],  # could also add 'Affine'
-                },
-                groupwise_resolution_kwargs={
-                    'transform': 'rigid',  # could also be affine
-                },
-                plot_summary=True,
-                return_metrics=True
-            )
-            mappings = mappings2
-            df = df2
-        else:
-            if 'ant' in method:
-                pairwise_reg_func = registration.registration_ANTsPy
+        try:
+            if use_rotation:
+                # phase shift registration
+                mappings1, df1 = registration.register(
+                    register_msims,
+                    reg_channel=reg_channel,
+                    reg_channel_index=reg_channel_index,
+                    transform_key='stage_metadata',
+                    new_transform_key='translation_registered',
+                    pairs=pairs,
+                    pre_registration_pruning_method=None,
+                    groupwise_resolution_kwargs={
+                        'transform': 'translation',
+                    },
+                    plot_summary=True,
+                    return_metrics=True
+                )
+                # affine registration
+                mappings2, df2 = registration.register(
+                    register_msims,
+                    reg_channel=reg_channel,
+                    reg_channel_index=reg_channel_index,
+                    transform_key='translation_registered',
+                    new_transform_key='registered',
+                    pairs=pairs,
+                    pre_registration_pruning_method=None,
+                    pairwise_reg_func=registration.registration_ANTsPy,
+                    pairwise_reg_func_kwargs={
+                        'transform_types': ['Rigid'],  # could also add 'Affine'
+                    },
+                    groupwise_resolution_kwargs={
+                        'transform': 'rigid',  # could also be affine
+                    },
+                    plot_summary=True,
+                    return_metrics=True
+                )
+                mappings = mappings2
+                df = df2
             else:
-                pairwise_reg_func = registration.phase_correlation_registration
-            logging.info(f'Registration method: {pairwise_reg_func.__name__}')
+                if 'ant' in method:
+                    pairwise_reg_func = registration.registration_ANTsPy
+                else:
+                    pairwise_reg_func = registration.phase_correlation_registration
+                logging.info(f'Registration method: {pairwise_reg_func.__name__}')
 
-            #abs_tol = 5 * np.max([np.max(si_utils.get_spacing_from_sim(sim, asarray=True)) for sim in sims])
+                #abs_tol = 5 * np.max([np.max(si_utils.get_spacing_from_sim(sim, asarray=True)) for sim in sims])
 
-            mappings, df = registration.register(
-                register_msims,
-                reg_channel=reg_channel,
-                reg_channel_index=reg_channel_index,
-                transform_key="stage_metadata",
-                new_transform_key="registered",
-                pairs=pairs,
-                pre_registration_pruning_method=None,
-                pairwise_reg_func=pairwise_reg_func,
+                mappings, df = registration.register(
+                    register_msims,
+                    reg_channel=reg_channel,
+                    reg_channel_index=reg_channel_index,
+                    transform_key="stage_metadata",
+                    new_transform_key="registered",
+                    pairs=pairs,
+                    pre_registration_pruning_method=None,
+                    pairwise_reg_func=pairwise_reg_func,
 
-                #registration_binning={dim: 1 for dim in 'yx'},
-                #groupwise_resolution_method='shortest_paths',
+                    #registration_binning={dim: 1 for dim in 'yx'},
+                    #groupwise_resolution_method='shortest_paths',
 
-                #groupwise_resolution_kwargs={
-                #    'transform': 'translation',
-                #    'max_residual_max_mean_ratio': 3.,
-                #    'abs_tol': abs_tol,
-                #},
+                    #groupwise_resolution_kwargs={
+                    #    'transform': 'translation',
+                    #    'max_residual_max_mean_ratio': 3.,
+                    #    'abs_tol': abs_tol,
+                    #},
 
-                post_registration_do_quality_filter=True,
-                post_registration_quality_threshold=0.1,
+                    post_registration_do_quality_filter=True,
+                    post_registration_quality_threshold=0.1,
 
-                plot_summary=True,
-                return_metrics=True
-            )
+                    plot_summary=True,
+                    return_metrics=True
+                )
 
-    final_residual = list(df['mean_residual'])[-1]
+            final_residual = list(df['mean_residual'])[-1]
+
+            mappings_dict = {index: mapping.data[0].tolist() for index, mapping in zip(indices, mappings)}
+            distances = [np.linalg.norm(apply_transform([(0, 0)], np.array(mapping))[0]) for mapping in
+                         mappings_dict.values()]
+
+            if is_channel_overlay:
+                sim0 = sims0[0]
+                spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
+                size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
+                norm_distance = np.sum(distances) / np.linalg.norm(size)
+                confidence = 1 - min(math.sqrt(norm_distance), 1)
+            else:
+                # Coefficient of variation
+                cvar = np.std(distances) / np.mean(distances)
+                confidence = 1 - min(cvar / 10, 1)
+
+            for msim, msim0 in zip(msims, msims0):
+                msi_utils.set_affine_transform(
+                    msim0,
+                    msi_utils.get_transform_from_msim(msim, transform_key='registered'),
+                    transform_key='registered')
+
+        except NotEnoughOverlapError:
+            final_residual = 0
+            confidence = 0
+            for msim0 in msims0:
+                msi_utils.set_affine_transform(
+                    msim0,
+                    param_utils.identity_transform(ndim=2, t_coords=[0]),
+                    transform_key='registered',
+                    base_transform_key='stage_metadata')
+            mappings_dict = {index: np.eye(3).tolist() for index, _ in enumerate(msims0)}
 
     if verbose:
         progress.update()
         progress.close()
-    mappings_dict = {int(index): mapping.data[0].tolist() for index, mapping in zip(indices, mappings)}
-    distances = [np.linalg.norm(apply_transform([(0, 0)], np.array(mapping))[0]) for mapping in mappings_dict.values()]
-
-    if is_channel_overlay:
-        sim0 = sims0[0]
-        spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-        size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
-        norm_distance = np.sum(distances) / np.linalg.norm(size)
-        confidence = 1 - min(math.sqrt(norm_distance), 1)
-    else:
-        # Coefficient of variation
-        cvar = np.std(distances) / np.mean(distances)
-        confidence = 1 - min(cvar / 10, 1)
-
-    for msim, msim0 in zip(msims, msims0):
-        msi_utils.set_affine_transform(
-            msim0,
-            msi_utils.get_transform_from_msim(msim, transform_key='registered'),
-            transform_key='registered')
 
     logging.info('Fusing...')
     # convert to multichannel images
@@ -359,7 +374,7 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
         output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
         channel_sims = [fusion.fuse(
             [sim],
-            transform_key="registered",
+            transform_key='registered',
             output_stack_properties=output_stack_properties
         ) for sim in sims0]
         channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]})
@@ -369,7 +384,7 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
     else:
         fused_image = fusion.fuse(
             sims0,
-            transform_key="registered"
+            transform_key='registered'
         )
     return {'mappings': mappings_dict,
             'final_residual': final_residual,
