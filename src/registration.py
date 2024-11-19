@@ -11,8 +11,9 @@ from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
-import re
 from ome_zarr.scale import Scaler
+import re
+import shutil
 from tqdm import tqdm
 import xarray as xr
 
@@ -432,6 +433,7 @@ def run_operation(params, params_general):
     use_rotation = params.get('use_rotation', False)
     reg_channel = params.get('channel', 0)
     channels = params.get('extra_metadata', {}).get('channels', [])
+    clear = params_general['output'].get('clear', False)
 
     show_original = params_general.get('show_original', False)
     npyramid_add = params_general.get('npyramid_add', 0)
@@ -452,8 +454,11 @@ def run_operation(params, params_general):
     input_dir, _ = split_path(ensure_list(input)[0])
     output = os.path.join(input_dir, params['output'])
     output_dir = os.path.dirname(output)
+    if clear:
+        shutil.rmtree(output_dir, ignore_errors=True)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
 
     original_positions_filename = output + 'positions_original.png'
     original_fused_filename = output + 'original'

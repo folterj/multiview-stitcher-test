@@ -5,6 +5,7 @@ general:
   break_on_error: False
   verbose: True
   output:
+    clear: True
     format: ome.zarr
     tile_size: []
     compression: []
