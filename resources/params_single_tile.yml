@@ -13,7 +13,7 @@ general:
     pyramid_downsample: 2
 
 operations:
-  - register:
+  - operation: register
     input: C:/Project/slides/EM04768_01_substrate_04/EM/a0004/roi0000/10_nm_pixel_size_a0004_roi0000_t0000.ome.tif
     invert_x_coordinates: False
     fix_missing_rotation: True

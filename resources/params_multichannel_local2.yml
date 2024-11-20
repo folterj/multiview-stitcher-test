@@ -12,7 +12,7 @@ general:
     pyramid_downsample: 2
 
 operations:
-  - register:
+  - operation: register
     input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection2/.*.ome.tif
     flatfield_quantile: 0.95
     invert_x_coordinates: True

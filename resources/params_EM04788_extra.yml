@@ -14,7 +14,7 @@ general:
     pyramid_downsample: 2
 
 operations:
-  - register:
+  - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section7/.*_t\d{4}.*.tif
     fix_missing_rotation: True
     normalisation: True
@@ -22,7 +22,7 @@ operations:
     method: phase_correlation
     output: stitched/
 
-  - register:
+  - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section20/.*_t\d{4}.*.tif
     fix_missing_rotation: True
     normalisation: True
@@ -30,7 +30,7 @@ operations:
     method: phase_correlation
     output: stitched/
 
-  - register:
+  - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section21/.*_t\d{4}.*.tif
     fix_missing_rotation: True
     normalisation: True
@@ -38,7 +38,7 @@ operations:
     method: phase_correlation
     output: stitched/
 
-  - register:
+  - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section22/.*_t\d{4}.*.tif
     fix_missing_rotation: True
     normalisation: True
@@ -46,7 +46,7 @@ operations:
     method: phase_correlation
     output: stitched/
 
-  - register:
+  - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section23/.*_t\d{4}.*.tif
     fix_missing_rotation: True
     normalisation: True

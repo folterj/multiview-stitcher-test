@@ -13,15 +13,9 @@ general:
     pyramid_downsample: 2
 
 operations:
-  - operation: register
-    input: C:/Project/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif
-    invert_x_coordinates: False
-    fix_missing_rotation: True
-    #flatfield_quantile: 0.95
-    normalisation: True
-    filter_foreground: False
-    use_orthogonal_pairs: True
-    use_rotation: False
-    channel: 0
+  - operation: stack
+    input: C:/Project/slides/EM04788_02_Sub_02/10nm/.*.tif
+    reset_coordinates: True
+    #normalisation: True
     method: phase_correlation
-    output: stitched/
+    output: aligned/

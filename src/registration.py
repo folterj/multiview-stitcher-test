@@ -57,7 +57,8 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fix_missing_rotation=False,
+def init_tiles(files, flatfield_quantile=None,
+               invert_x_coordinates=False, is_fix_missing_rotation=False, reset_coordinates=True,
                verbose=False):
     sims = []
     sources = [create_source(file) for file in files]
@@ -83,10 +84,13 @@ def init_tiles(files, flatfield_quantile=None, invert_x_coordinates=False, is_fi
 
     translations = []
     for source, image in zip(sources, images):
-        translation = np.array(get_value_units_micrometer(source.position))
-        if invert_x_coordinates:
-            translation[0] = -translation[0]
-        translation[1] = -translation[1]
+        if reset_coordinates:
+            translation = np.zeros(3)
+        else:
+            translation = np.array(get_value_units_micrometer(source.position))
+            if invert_x_coordinates:
+                translation[0] = -translation[0]
+            translation[1] = -translation[1]
         translations.append(translation)
 
     if is_fix_missing_rotation:
@@ -191,7 +195,7 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     return pairs, angles
 
 
-def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
+def register(sims0, operation, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, channels=[], verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
@@ -246,7 +250,9 @@ def register(sims0, method, reg_channel=None, reg_channel_index=None, normalisat
     if verbose:
         progress = tqdm()
 
-    if use_orthogonal_pairs:
+    if 'stack' in operation:
+        pairs = [(index, index + 1) for index in range(len(register_msims) - 1)]
+    elif use_orthogonal_pairs:
         register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
         origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
         sim0 = register_sims[0]
@@ -436,6 +442,7 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
 
 
 def run_operation(params, params_general):
+    operation = params['operation']
     input = params['input']
     output_params = params_general.get('output', {})
     method = params.get('method', '').lower()
@@ -445,6 +452,7 @@ def run_operation(params, params_general):
     filter_foreground = params.get('filter_foreground', False)
     use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
     is_fix_missing_rotation = params.get('fix_missing_rotation', False)
+    reset_coordinates = params.get('reset_coordinates', False)
     use_rotation = params.get('use_rotation', False)
     reg_channel = params.get('channel', 0)
     channels = params.get('extra_metadata', {}).get('channels', [])
@@ -480,8 +488,11 @@ def run_operation(params, params_general):
     registered_fused_filename = output + 'registered'
 
     logging.info('Initialising tiles...')
-    sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile, invert_x_coordinates=invert_x_coordinates,
-                      is_fix_missing_rotation=is_fix_missing_rotation, verbose=verbose)
+    sims = init_tiles(filenames, flatfield_quantile=flatfield_quantile,
+                      invert_x_coordinates=invert_x_coordinates,
+                      is_fix_missing_rotation=is_fix_missing_rotation,
+                      reset_coordinates=reset_coordinates,
+                      verbose=verbose)
 
     if len(filenames) == 1:
         logging.warning('Skipping registration (single tile)')
@@ -508,7 +519,7 @@ def run_operation(params, params_general):
         save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
-    results = register(sims, method, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
+    results = register(sims, operation, method, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                        use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, channels=channels,
                        verbose=verbose)
     logging.info(f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}')
