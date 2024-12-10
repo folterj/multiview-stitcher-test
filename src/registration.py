@@ -196,11 +196,13 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
 
 
 def register(sims0, operation, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False, channels=[], verbose=False):
+             use_orthogonal_pairs=False, use_rotation=False, extra_metadata={}, verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
 
+    channels = extra_metadata.get('channels', [])
+    z_scale = extra_metadata.get('scale', {}).get('z', 1)
     is_channel_overlay = (len(channels) > 0)
     # normalisation
     if normalisation:
@@ -263,77 +265,51 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
         pairs = None
     with ProgressBar() if verbose else nullcontext():
         try:
-            if use_rotation:
-                # phase shift registration
-                mappings1, df1 = registration.register(
-                    register_msims,
-                    reg_channel=reg_channel,
-                    reg_channel_index=reg_channel_index,
-                    transform_key='stage_metadata',
-                    new_transform_key='translation_registered',
-                    pairs=pairs,
-                    pre_registration_pruning_method=None,
-                    groupwise_resolution_kwargs={
-                        'transform': 'translation',
-                    },
-                    plot_summary=True,
-                    return_metrics=True
-                )
-                # affine registration
-                mappings2, df2 = registration.register(
-                    register_msims,
-                    reg_channel=reg_channel,
-                    reg_channel_index=reg_channel_index,
-                    transform_key='translation_registered',
-                    new_transform_key='registered',
-                    pairs=pairs,
-                    pre_registration_pruning_method=None,
-                    pairwise_reg_func=registration.registration_ANTsPy,
-                    pairwise_reg_func_kwargs={
-                        'transform_types': ['Rigid'],  # could also add 'Affine'
-                    },
-                    groupwise_resolution_kwargs={
-                        'transform': 'rigid',  # could also be affine
-                    },
-                    plot_summary=True,
-                    return_metrics=True
-                )
-                mappings = mappings2
-                df = df2
+            if 'ant' in method:
+                pairwise_reg_func = registration.registration_ANTsPy
             else:
-                if 'ant' in method:
-                    pairwise_reg_func = registration.registration_ANTsPy
-                else:
-                    pairwise_reg_func = registration.phase_correlation_registration
-                logging.info(f'Registration method: {pairwise_reg_func.__name__}')
+                pairwise_reg_func = registration.phase_correlation_registration
+            logging.info(f'Registration method: {pairwise_reg_func.__name__}')
 
-                #abs_tol = 5 * np.max([np.max(si_utils.get_spacing_from_sim(sim, asarray=True)) for sim in sims])
+            if use_rotation:
+                pairwise_reg_func_kwargs = {
+                    'transform_types': ['Rigid'],
+                    # options include 'Translation', 'Rigid', 'Affine', 'Similarity' and can be concatenated
+                    #"aff_metric": "meansquares",  # options include 'mattes', 'meansquares',
+                    # more parameters to tune:
+                    # "aff_random_sampling_rate": 0.2,
+                    # "aff_iterations": (2000, 2000),
+                    # "aff_smoothing_sigmas": (1, 0),
+                    # "aff_shrink_factors": (2, 1),
+                }
+                # these are the parameters for the groupwise registration (global optimization)
+                groupwise_resolution_kwargs = {
+                    'transform': 'rigid',  # options include 'translation', 'rigid', 'affine'
+                }
+            else:
+                pairwise_reg_func_kwargs = None
+                groupwise_resolution_kwargs = None
 
-                mappings, df = registration.register(
-                    register_msims,
-                    reg_channel=reg_channel,
-                    reg_channel_index=reg_channel_index,
-                    transform_key="stage_metadata",
-                    new_transform_key="registered",
-                    pairs=pairs,
-                    pre_registration_pruning_method=None,
-                    pairwise_reg_func=pairwise_reg_func,
+            mappings, df = registration.register(
+                register_msims,
+                reg_channel=reg_channel,
+                reg_channel_index=reg_channel_index,
+                transform_key="stage_metadata",
+                new_transform_key="registered",
 
-                    #registration_binning={dim: 1 for dim in 'yx'},
-                    #groupwise_resolution_method='shortest_paths',
+                pairs=pairs,
+                pre_registration_pruning_method=None,
 
-                    #groupwise_resolution_kwargs={
-                    #    'transform': 'translation',
-                    #    'max_residual_max_mean_ratio': 3.,
-                    #    'abs_tol': abs_tol,
-                    #},
+                pairwise_reg_func=pairwise_reg_func,
+                pairwise_reg_func_kwargs=pairwise_reg_func_kwargs,
+                groupwise_resolution_kwargs=groupwise_resolution_kwargs,
 
-                    post_registration_do_quality_filter=True,
-                    post_registration_quality_threshold=0.1,
+                post_registration_do_quality_filter=True,
+                post_registration_quality_threshold=0.1,
 
-                    plot_summary=True,
-                    return_metrics=True
-                )
+                plot_summary=True,
+                return_metrics=True
+            )
 
             final_residual = list(df['mean_residual'])[-1]
 
@@ -376,16 +352,24 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     logging.info('Fusing...')
     # convert to multichannel images
     sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
-    if is_channel_overlay:
+    if 'stack' in operation:
+        output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
+        stack_sims = [fusion.fuse(
+            [sim],
+            transform_key='registered',
+            output_stack_properties=output_stack_properties
+        ) for sim in sims0]
+        #stack_sims = [sim.assign_coords({'z': simi * z_scale}) for simi, sim in enumerate(stack_sims)]
+        stack_sims = [sim.expand_dims(axis=2, z=[simi * z_scale]) for simi, sim in enumerate(stack_sims)]
+        fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
+    elif is_channel_overlay:
         output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
         channel_sims = [fusion.fuse(
             [sim],
             transform_key='registered',
             output_stack_properties=output_stack_properties
         ) for sim in sims0]
-        channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]})
-                        for simi, sim in enumerate(channel_sims)]
-        #fused_image = xr.combine_by_coords([sim.rename(None) for sim in channel_sims], combine_attrs='override')
+        channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
         fused_image = xr.combine_nested([sim.rename() for sim in channel_sims], concat_dim='c', combine_attrs='override')
     else:
         fused_image = fusion.fuse(
@@ -422,7 +406,8 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
         transform = np.array(transform)
         transform_translation = param_utils.translation_from_affine(transform)
         for isdim, sdim in enumerate(sdims):
-            origin[sdim] += transform_translation[isdim]
+            if isdim < len(transform_translation):
+                origin[sdim] += transform_translation[isdim]
     position = [origin[dim] for dim in sdims]
     if positions is None:
         positions = [position] * nchannels
@@ -455,7 +440,8 @@ def run_operation(params, params_general):
     reset_coordinates = params.get('reset_coordinates', False)
     use_rotation = params.get('use_rotation', False)
     reg_channel = params.get('channel', 0)
-    channels = params.get('extra_metadata', {}).get('channels', [])
+    extra_metadata = params.get('extra_metadata', {})
+    channels = extra_metadata.get('channels', [])
     clear = params_general['output'].get('clear', False)
 
     show_original = params_general.get('show_original', False)
@@ -520,13 +506,16 @@ def run_operation(params, params_general):
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
     results = register(sims, operation, method, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
-                       use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, channels=channels,
+                       use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, extra_metadata=extra_metadata,
                        verbose=verbose)
     logging.info(f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}')
     mappings = results['mappings']
     mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
     with open(output + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
+    if verbose:
+        print('Mappings:')
+        print(mappings2)
 
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
