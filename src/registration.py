@@ -2,6 +2,7 @@
 # https://github.com/pydata/xarray/issues/8828
 
 from contextlib import nullcontext
+import cv2 as cv
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -15,6 +16,7 @@ import os
 from ome_zarr.scale import Scaler
 import re
 import shutil
+from sklearn.neighbors import KDTree
 from tqdm import tqdm
 import xarray as xr
 
@@ -24,6 +26,9 @@ from src.image.ome_tiff_helper import save_ome_tiff
 from src.image.ome_zarr_helper import save_ome_zarr
 from src.image.util import *
 from src.util import *
+
+
+pixel_size_xyz = [1, 1, 1]
 
 
 def init_logging(params_general):
@@ -195,11 +200,81 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     return pairs, angles
 
 
+def pairwise_registration_SIFT0(
+    fixed_data, moving_data,
+    **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
+    ) -> dict:
+    transform=cv.getRotationMatrix2D((fixed_data.shape[0]//2, fixed_data.shape[1]//2), -38, 1)
+    transform = np.vstack([transform, [0, 0, 1]])
+    transform = np.linalg.inv(transform)
+
+    return {
+        "affine_matrix": transform,  # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
+        "quality": 1  # float between 0 and 1 (if not available, set to 1.0)
+    }
+
+def detect_features(data):
+    feature_model = cv.ORB_create()
+    kp, desc = feature_model.detectAndCompute(data, None)
+    points = [kp1.pt for kp1 in kp]
+    if len(points) >= 2:
+        tree = KDTree(points, leaf_size=2)
+        dist, ind = tree.query(points, k=2)
+        nn_distance = np.median(dist[:, 1])
+    else:
+        nn_distance = 1
+    #image = cv.drawKeypoints(data, kp, data)
+    #show_image(image)
+    return points, desc, nn_distance
+
+
+def pairwise_registration_features(
+    fixed_data, moving_data,
+    **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
+    ) -> dict:
+
+    points1, desc1, nn_distance1 = detect_features(fixed_data.data)
+    points2, desc2, nn_distance2 = detect_features(moving_data.data)
+    nn_distance = np.mean([nn_distance1, nn_distance2])
+
+    matcher = cv.BFMatcher()
+
+    #matches = matcher.match(desc1, desc2)
+    matches0 = matcher.knnMatch(desc1, desc2, k=2)
+    matches = []
+    for m, n in matches0:
+        if m.distance < 0.75 * n.distance:
+            matches.append(m)
+
+    if len(matches) >= 4:
+        query_points = np.float32([points1[m.queryIdx] for m in matches])
+        train_points = np.float32([points2[m.trainIdx] for m in matches])
+        transform, mask = cv.findHomography(query_points, train_points, method=cv.USAC_MAGSAC, ransacReprojThreshold=nn_distance)
+
+        angle = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
+        print('angle:', angle)
+
+        #transform = np.transpose(np.transpose(transform) * pixel_size_xyz)
+        transform *= pixel_size_xyz
+        #transform = np.linalg.inv(transform)
+    else:
+        transform = np.eye(3)
+
+    return {
+        "affine_matrix": transform, # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
+        "quality": 1 # float between 0 and 1 (if not available, set to 1.0)
+    }
+
+
 def register(sims0, operation, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, extra_metadata={}, verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
         reg_channel = None
+
+    global pixel_size_xyz
+    sim0 = sims0[0]
+    pixel_size_xyz = [si_utils.get_spacing_from_sim(sim0).get(dim, 1) for dim in 'xyz']
 
     channels = extra_metadata.get('channels', [])
     z_scale = extra_metadata.get('scale', {}).get('z', 1)
@@ -265,7 +340,9 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
         pairs = None
     with ProgressBar() if verbose else nullcontext():
         try:
-            if 'ant' in method:
+            if 'feature' in method:
+                pairwise_reg_func = pairwise_registration_features
+            elif 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
             else:
                 pairwise_reg_func = registration.phase_correlation_registration
@@ -277,6 +354,11 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                     # options include 'Translation', 'Rigid', 'Affine', 'Similarity' and can be concatenated
                     #"aff_metric": "meansquares",  # options include 'mattes', 'meansquares',
                     # more parameters to tune:
+                    "aff_random_sampling_rate": 0.5,
+                    "aff_iterations": (2000, 2000, 1000, 1000),
+                    "aff_smoothing_sigmas": (4, 2, 1, 0),
+                    "aff_shrink_factors": (16, 8, 2, 1),
+
                     # "aff_random_sampling_rate": 0.2,
                     # "aff_iterations": (2000, 2000),
                     # "aff_smoothing_sigmas": (1, 0),
