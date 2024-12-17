@@ -219,6 +219,24 @@ def convert_rational_value(value) -> float:
     return value
 
 
+def get_moments(data, offset=(0, 0)):
+    moments = cv.moments((np.array(data) + offset).astype(np.float32))    # doesn't work for float64!
+    return moments
+
+
+def get_moments_center(moments, offset=(0, 0)):
+    return np.array([moments['m10'], moments['m01']]) / moments['m00'] + np.array(offset)
+
+
+def get_center(data, offset=(0, 0)):
+    moments = get_moments(data, offset=offset)
+    if moments['m00'] != 0:
+        center = get_moments_center(moments)
+    else:
+        center = np.mean(data, 0).flatten()  # close approximation
+    return center.astype(np.float32)
+
+
 def create_transform(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
     transform = cv.getRotationMatrix2D(center, angle, scale)
     transform[:, 2] += translate
@@ -244,22 +262,3 @@ def apply_transform(points, transform):
 def convert_xyz_to_dict(xyz, axes='xyz'):
     dct = {dim: value for dim, value in zip(axes, xyz)}
     return dct
-
-
-def retuple(chunks, shape):
-    # from ome-zarr-py
-    """
-    Expand chunks to match shape.
-
-    E.g. if chunks is (64, 64) and shape is (3, 4, 5, 1028, 1028)
-    return (3, 4, 5, 64, 64)
-
-    If chunks is an integer, it is applied to all dimensions, to match
-    the behaviour of zarr-python.
-    """
-
-    if isinstance(chunks, int):
-        return tuple([chunks] * len(shape))
-
-    dims_to_add = len(shape) - len(chunks)
-    return *shape[:dims_to_add], *chunks

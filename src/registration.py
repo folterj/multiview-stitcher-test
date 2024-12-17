@@ -14,6 +14,7 @@ from multiview_stitcher.mv_graph import NotEnoughOverlapError
 import numpy as np
 import os
 from ome_zarr.scale import Scaler
+from probreg import cpd
 import re
 import shutil
 from sklearn.neighbors import KDTree
@@ -266,6 +267,32 @@ def pairwise_registration_features(
     }
 
 
+def pairwise_registration_CPD(
+    fixed_data, moving_data,
+    **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
+    ) -> dict:
+    max_iter = kwargs.get('max_iter', 200)
+
+    center = np.flip(fixed_data.shape) / 2
+    points1 = points_to_3d([point - center for point, area in detect_area_points(fixed_data.data)])
+    points2 = points_to_3d([point - center for point, area in detect_area_points(moving_data.data)])
+
+    result_cpd = cpd.registration_cpd(points1, points2, w=0.00001, maxiter=max_iter, tol=0.1)
+    transformation = result_cpd.transformation
+    transform = transformation.scale * transformation.rot
+    transform[:, 2] += transformation.t
+
+    angle = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
+    print('angle:', angle)
+
+    transform *= pixel_size_xyz
+
+    return {
+        "affine_matrix": transform,  # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
+        "quality": 1  # float between 0 and 1 (if not available, set to 1.0)
+    }
+
+
 def register(sims0, operation, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, extra_metadata={}, verbose=False):
     if isinstance(reg_channel, int):
@@ -342,6 +369,8 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
         try:
             if 'feature' in method:
                 pairwise_reg_func = pairwise_registration_features
+            elif 'cpd' in method:
+                pairwise_reg_func = pairwise_registration_CPD
             elif 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
             else:
