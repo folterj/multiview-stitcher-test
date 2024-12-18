@@ -550,13 +550,20 @@ def filter_noise_images(images):
     return int(threshold), mask
 
 
-def detect_area_points(image, min_area=1):
+def detect_area_points(image):
     threshold, binimage = cv.threshold(image, 0, 255, cv.THRESH_OTSU)
     contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     contours = contours0[0] if len(contours0) == 2 else contours0[1]
     area_contours = [(contour, cv.contourArea(contour)) for contour in contours]
     area_contours.sort(key=lambda contour_area: contour_area[1], reverse=True)
+    min_area = max(np.mean([area for contour, area in area_contours]), 1)
     area_points = [(get_center(contour), area) for contour, area in area_contours if area > min_area]
+
+    #image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+    #for point in area_points:
+    #    radius = int(np.round(np.sqrt(point[1]/np.pi)))
+    #    cv.circle(image, tuple(np.round(point[0]).astype(int)), radius, (255, 0, 0), -1)
+    #show_image(image)
     return area_points
 
 

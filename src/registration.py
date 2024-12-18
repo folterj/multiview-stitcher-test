@@ -214,6 +214,7 @@ def pairwise_registration_SIFT0(
         "quality": 1  # float between 0 and 1 (if not available, set to 1.0)
     }
 
+
 def detect_features(data):
     feature_model = cv.ORB_create()
     kp, desc = feature_model.detectAndCompute(data, None)
@@ -274,18 +275,21 @@ def pairwise_registration_CPD(
     max_iter = kwargs.get('max_iter', 200)
 
     center = np.flip(fixed_data.shape) / 2
-    points1 = points_to_3d([point - center for point, area in detect_area_points(fixed_data.data)])
-    points2 = points_to_3d([point - center for point, area in detect_area_points(moving_data.data)])
+    points1 = points_to_3d([point for point, area in detect_area_points(fixed_data.data)])
+    points2 = points_to_3d([point for point, area in detect_area_points(moving_data.data)])
 
-    result_cpd = cpd.registration_cpd(points1, points2, w=0.00001, maxiter=max_iter, tol=0.1)
+    result_cpd = cpd.registration_cpd(points1, points2, maxiter=max_iter)
     transformation = result_cpd.transformation
-    transform = transformation.scale * transformation.rot
-    transform[:, 2] += transformation.t
+    S = transformation.scale * np.eye(3)
+    R = transformation.rot
+    T = np.eye(3) + np.hstack([np.zeros((3, 2)), (transformation.t).reshape(-1, 1)])
+    transform = T @ R @ S
 
     angle = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
     print('angle:', angle)
 
-    transform *= pixel_size_xyz
+    #transform *= pixel_size_xyz
+    #transform = np.linalg.inv(transform)
 
     return {
         "affine_matrix": transform,  # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
