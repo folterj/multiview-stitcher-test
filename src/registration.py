@@ -201,13 +201,13 @@ def get_orthogonal_pairs_from_tiles(origins, image_size_um):
     return pairs, angles
 
 
-def pairwise_registration_SIFT0(
+def pairwise_registration_dummy(
     fixed_data, moving_data,
     **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
     ) -> dict:
-    transform=cv.getRotationMatrix2D((fixed_data.shape[0]//2, fixed_data.shape[1]//2), -38, 1)
+    transform=cv.getRotationMatrix2D((fixed_data.shape[0]//2, fixed_data.shape[1]//2), 38, 1)
     transform = np.vstack([transform, [0, 0, 1]])
-    transform = np.linalg.inv(transform)
+    transform[:, 2] += [300, 25, 0]
 
     return {
         "affine_matrix": transform,  # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
@@ -235,31 +235,25 @@ def pairwise_registration_features(
     **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
     ) -> dict:
 
-    points1, desc1, nn_distance1 = detect_features(fixed_data.data)
-    points2, desc2, nn_distance2 = detect_features(moving_data.data)
+    fixed_points, fixed_desc, nn_distance1 = detect_features(fixed_data.data)
+    moving_points, moving_desc, nn_distance2 = detect_features(moving_data.data)
     nn_distance = np.mean([nn_distance1, nn_distance2])
 
     matcher = cv.BFMatcher()
 
-    #matches = matcher.match(desc1, desc2)
-    matches0 = matcher.knnMatch(desc1, desc2, k=2)
+    #matches = matcher.match(fixed_desc, moving_desc)
+    matches0 = matcher.knnMatch(fixed_desc, moving_desc, k=2)
     matches = []
     for m, n in matches0:
         if m.distance < 0.75 * n.distance:
             matches.append(m)
 
     if len(matches) >= 4:
-        query_points = np.float32([points1[m.queryIdx] for m in matches])
-        train_points = np.float32([points2[m.trainIdx] for m in matches])
-        transform, mask = cv.findHomography(query_points, train_points, method=cv.USAC_MAGSAC, ransacReprojThreshold=nn_distance)
-
-        angle = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
-        print('angle:', angle)
-
-        #transform = np.transpose(np.transpose(transform) * pixel_size_xyz)
-        transform *= pixel_size_xyz
-        #transform = np.linalg.inv(transform)
+        fixed_points2 = np.float32([fixed_points[m.queryIdx] for m in matches])
+        moving_points2 = np.float32([moving_points[m.trainIdx] for m in matches])
+        transform, mask = cv.findHomography(fixed_points2, moving_points2, method=cv.USAC_MAGSAC, ransacReprojThreshold=nn_distance)
     else:
+        logging.error('Not enough matches for feature-based registration')
         transform = np.eye(3)
 
     return {
@@ -268,28 +262,25 @@ def pairwise_registration_features(
     }
 
 
-def pairwise_registration_CPD(
+def pairwise_registration_cpd(
     fixed_data, moving_data,
     **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
     ) -> dict:
-    max_iter = kwargs.get('max_iter', 200)
+    max_iter = kwargs.get('max_iter', 1000)
 
-    center = np.flip(fixed_data.shape) / 2
-    points1 = points_to_3d([point for point, area in detect_area_points(fixed_data.data)])
-    points2 = points_to_3d([point for point, area in detect_area_points(moving_data.data)])
+    fixed_points = points_to_3d([point for point, area in detect_area_points(fixed_data.data)])
+    moving_points = points_to_3d([point for point, area in detect_area_points(moving_data.data)])
 
-    result_cpd = cpd.registration_cpd(points1, points2, maxiter=max_iter)
-    transformation = result_cpd.transformation
-    S = transformation.scale * np.eye(3)
-    R = transformation.rot
-    T = np.eye(3) + np.hstack([np.zeros((3, 2)), (transformation.t).reshape(-1, 1)])
-    transform = T @ R @ S
-
-    angle = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
-    print('angle:', angle)
-
-    #transform *= pixel_size_xyz
-    #transform = np.linalg.inv(transform)
+    if len(moving_points) > 1 and len(fixed_points) > 1:
+        result_cpd = cpd.registration_cpd(moving_points, fixed_points, maxiter=max_iter)
+        transformation = result_cpd.transformation
+        S = transformation.scale * np.eye(3)
+        R = transformation.rot
+        T = np.eye(3) + np.hstack([np.zeros((3, 2)), transformation.t.reshape(-1, 1)])
+        transform = T @ R @ S
+    else:
+        logging.error('Not enough points for CPD registration')
+        transform = np.eye(3)
 
     return {
         "affine_matrix": transform,  # homogenous matrix of shape (ndim + 1, ndim + 1), axis order (z, y, x)
@@ -309,6 +300,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
 
     channels = extra_metadata.get('channels', [])
     z_scale = extra_metadata.get('scale', {}).get('z', 1)
+    is_stack = ('stack' in operation)
     is_channel_overlay = (len(channels) > 0)
     # normalisation
     if normalisation:
@@ -371,10 +363,12 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
         pairs = None
     with ProgressBar() if verbose else nullcontext():
         try:
-            if 'feature' in method:
+            if 'dummy' in method:
+                pairwise_reg_func = pairwise_registration_dummy
+            elif 'feature' in method:
                 pairwise_reg_func = pairwise_registration_features
             elif 'cpd' in method:
-                pairwise_reg_func = pairwise_registration_CPD
+                pairwise_reg_func = pairwise_registration_cpd
             elif 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
             else:
@@ -467,7 +461,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     logging.info('Fusing...')
     # convert to multichannel images
     sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
-    if 'stack' in operation:
+    if is_stack:
         output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
         stack_sims = [fusion.fuse(
             [sim],

@@ -551,9 +551,15 @@ def filter_noise_images(images):
 
 
 def detect_area_points(image):
-    threshold, binimage = cv.threshold(image, 0, 255, cv.THRESH_OTSU)
-    contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-    contours = contours0[0] if len(contours0) == 2 else contours0[1]
+    method = cv.THRESH_OTSU
+    threshold = -5
+    contours = []
+    while len(contours) <= 1 and threshold <= 255:
+        _, binimage = cv.threshold(image, threshold, 255, method)
+        contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+        contours = contours0[0] if len(contours0) == 2 else contours0[1]
+        method = cv.THRESH_BINARY
+        threshold += 5
     area_contours = [(contour, cv.contourArea(contour)) for contour in contours]
     area_contours.sort(key=lambda contour_area: contour_area[1], reverse=True)
     min_area = max(np.mean([area for contour, area in area_contours]), 1)
