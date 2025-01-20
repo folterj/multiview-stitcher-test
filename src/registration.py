@@ -14,7 +14,6 @@ from multiview_stitcher.mv_graph import NotEnoughOverlapError
 import numpy as np
 import os
 from ome_zarr.scale import Scaler
-from probreg import cpd
 import re
 import shutil
 from sklearn.neighbors import KDTree
@@ -368,6 +367,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             elif 'feature' in method:
                 pairwise_reg_func = pairwise_registration_features
             elif 'cpd' in method:
+                from probreg import cpd
                 pairwise_reg_func = pairwise_registration_cpd
             elif 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
@@ -649,11 +649,7 @@ def run(params):
         input = operation['input']
         logging.info(f'Input: {input}')
         try:
-            input_dir, _ = split_path(ensure_list(input)[0])
-            if os.path.exists(input_dir):
-                run_operation(operation, params_general)
-            else:
-                raise FileNotFoundError(f'Input directory not found: {input_dir}')
+            run_operation(operation, params_general)
         except Exception as e:
             logging.exception(f'Error processing: {input}')
             print(f'Error processing: {input}: {e}')

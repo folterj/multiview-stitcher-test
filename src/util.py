@@ -1,5 +1,6 @@
 import ast
 import cv2 as cv
+import glob
 import os
 import re
 import numpy as np
@@ -131,8 +132,7 @@ def split_path(path):
 
 
 def dir_regex(pattern):
-    dir, file_pattern = split_path(pattern)
-    files = [os.path.join(dir, file) for file in os.listdir(dir) if re.search(file_pattern, file)]
+    files = glob.glob(pattern, recursive=True)
     files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
     return files_sorted
 
