@@ -7,7 +7,7 @@ general:
   output:
     clear: True
     overwrite: True
-    format: ome.zarr, ome.tiff
+    format: ome.tiff
     tile_size: []
     compression: []
     npyramid_add: 4
