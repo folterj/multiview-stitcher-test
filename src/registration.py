@@ -537,7 +537,31 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
 
 def run_operation(params, params_general):
     operation = params['operation']
-    input = params['input']
+    filenames = dir_regex(params['input'])
+    if 'match' in operation:
+        matches = {}
+        for filename in filenames:
+            parts = split_underscore_numeric(filename)
+            slice = parts.get('s')
+            if slice is not None:
+                if slice not in matches:
+                    matches[slice] = []
+                matches[slice].append(filename)
+            if len(matches) == 0:
+                matches[0] = filenames
+        filesets = list(matches.values())
+        fileset_labels = list(matches.keys())
+    else:
+        filesets = [filenames]
+        fileset_labels = ['']
+    for fileset, fileset_label in zip(filesets, fileset_labels):
+        if len(filesets) > 1:
+            logging.info(f'File set: {fileset_label}')
+        run_operation_files(fileset, params, params_general)
+
+
+def run_operation_files(filenames, params, params_general):
+    operation = params['operation']
     output_params = params_general.get('output', {})
     method = params.get('method', '').lower()
     invert_x_coordinates = params.get('invert_x_coordinates', False)
@@ -558,12 +582,7 @@ def run_operation(params, params_general):
     pyramid_downsample = params_general.get('pyramid_downsample', 2)
     verbose = params_general.get('verbose', False)
 
-    if isinstance(input, list):
-        filenames = input
-        file_indices = list(range(len(filenames)))
-    else:
-        filenames = dir_regex(input)
-        file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
+    file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
     if len(filenames) == 0:
         logging.warning('Skipping (no tiles)')
@@ -646,13 +665,13 @@ def run(params):
     break_on_error = params_general.get('break_on_error', False)
 
     for operation in tqdm(params['operations']):
-        input = operation['input']
-        logging.info(f'Input: {input}')
+        input_path = operation['input']
+        logging.info(f'Input: {input_path}')
         try:
             run_operation(operation, params_general)
         except Exception as e:
-            logging.exception(f'Error processing: {input}')
-            print(f'Error processing: {input}: {e}')
+            logging.exception(f'Error processing: {input_path}')
+            print(f'Error processing: {input_path}: {e}')
             if break_on_error:
                 break
 

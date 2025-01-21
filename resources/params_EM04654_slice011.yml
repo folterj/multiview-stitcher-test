@@ -1,0 +1,25 @@
+general:
+  log_filename: log/multiview-stitcher-test.log
+  log_format: '%(asctime)s %(levelname)s: %(message)s'
+  show_original: False
+  break_on_error: False
+  verbose: False
+  output:
+    clear: True
+    overwrite: True
+    format: ome.tiff
+    tile_size: []
+    compression: []
+    npyramid_add: 4
+    pyramid_downsample: 2
+
+operations:
+  - operation: match
+    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
+    input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+    fix_missing_rotation: True
+    normalisation: True
+    use_orthogonal_pairs: True
+    method: phase_correlation
+    #output: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/
+    output: D:/slides/EM04654_slice011/stitched/

@@ -135,6 +135,19 @@ def find_all_numbers(text: str) -> list:
     return list(map(int, re.findall(r'\d+', text)))
 
 
+def split_underscore_numeric(text: str) -> dict:
+    num_parts = {}
+    parts = text.split('_')
+    for part in parts:
+        num_span = re.search(r'\d+', part)
+        if num_span:
+            index = num_span.start()
+            if index > 0:
+                label = part[:index]
+                num_parts[label] = int(num_span.group())
+    return num_parts
+
+
 def split_num_text(text: str) -> list:
     num_texts = []
     block = ''
