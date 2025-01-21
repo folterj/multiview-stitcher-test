@@ -125,12 +125,6 @@ def get_filetitle(filename: str) -> str:
     return title
 
 
-def split_path(path):
-    # split path including regexes
-    index = path.rfind('/')
-    return path[:index], path[index + 1:]
-
-
 def dir_regex(pattern):
     files = glob.glob(pattern, recursive=True)
     files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))

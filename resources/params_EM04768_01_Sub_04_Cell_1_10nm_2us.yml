@@ -20,109 +20,109 @@ operations:
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0002_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0003/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0003_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0004/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0004_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0005/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0005_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0006/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0006_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0007/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0007_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0008/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0008_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0009/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0009_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0010/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0010_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0011/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0011_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0012/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0012_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0013/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0013_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0014/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0014_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0015/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0015_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0016/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0016_stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/tiles/a0017/roi0000/t????/*_t????.*.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: stitched/
+    output: /nemo/project/proj-czi-vp/processed/em/EM04768/EM04768_01/EM04768_01_Sub_04/Cell 1/10_nm_pixel_2us/a0017_stitched/

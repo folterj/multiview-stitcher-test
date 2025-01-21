@@ -569,7 +569,7 @@ def run_operation(params, params_general):
         logging.warning('Skipping (no tiles)')
         return
 
-    input_dir, _ = split_path(ensure_list(input)[0])
+    input_dir = os.path.dirname(filenames[0])
     output = os.path.join(input_dir, params['output'])
     output_dir = os.path.dirname(output)
     if clear:
