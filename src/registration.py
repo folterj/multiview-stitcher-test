@@ -1,6 +1,7 @@
 # https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
 # https://github.com/pydata/xarray/issues/8828
 
+import csv
 from contextlib import nullcontext
 import cv2 as cv
 from dask.diagnostics import ProgressBar
@@ -109,8 +110,6 @@ def init_tiles(files, flatfield_quantile=None,
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
         translation = convert_xyz_to_dict(translation)
-        if not translation.keys() == scale.keys():
-            translation = {key: translation.get(key, 0) for key in scale.keys()}
         channel_labels = [channel.get('label', '') for channel in source.get_channels()]
         sim = si_utils.get_sim_from_array(
             image,
@@ -399,7 +398,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                 pairwise_reg_func_kwargs = None
                 groupwise_resolution_kwargs = None
 
-            mappings, df = registration.register(
+            mappings, metrics = registration.register(
                 register_msims,
                 reg_channel=reg_channel,
                 reg_channel_index=reg_channel_index,
@@ -420,11 +419,11 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                 return_metrics=True
             )
 
-            final_residual = list(df['mean_residual'])[-1]
+            final_residual = list(metrics['mean_residual'])[-1]
 
-            mappings_dict = {index: mapping.data[0].tolist() for index, mapping in zip(indices, mappings)}
-            distances = [np.linalg.norm(apply_transform([(0, 0)], np.array(mapping))[0]) for mapping in
-                         mappings_dict.values()]
+            mappings_dict = {index: mapping.data[0] for index, mapping in zip(indices, mappings)}
+            distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
+                         for mapping in mappings_dict.values()]
 
             if is_channel_overlay:
                 sim0 = sims0[0]
@@ -452,7 +451,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                     param_utils.identity_transform(ndim=2, t_coords=[0]),
                     transform_key='registered',
                     base_transform_key='stage_metadata')
-            mappings_dict = {index: np.eye(3).tolist() for index, _ in enumerate(msims0)}
+            mappings_dict = {index: np.eye(3) for index, _ in enumerate(msims0)}
 
     if verbose:
         progress.update()
@@ -492,34 +491,15 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             'fused_image': fused_image}
 
 
-def save_image(filename, data, transform_key=None, channels=None, positions=None,
+def save_image(filename, data, transform_key=None, channels=None, transforms=None,
                npyramid_add=4, pyramid_downsample=2, params={}):
     dimension_order = ''.join(data.dims)
-    sdims = si_utils.get_spatial_dims_from_sim(data)
-    nsdims = si_utils.get_nonspatial_dims_from_sim(data)
-    nchannels = data.sizes.get('c', 1)
-
+    sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
+    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
     pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
-
-    origin = si_utils.get_origin_from_sim(data)
-    if transform_key is not None:
-        transform = si_utils.get_affine_from_sim(data, transform_key)
-        for nsdim in nsdims:
-            if nsdim in transform.dims:
-                transform = transform.sel(
-                    {
-                        nsdim: transform.coords[nsdim][0]
-                        for nsdim in transform.dims
-                    }
-                )
-        transform = np.array(transform)
-        transform_translation = param_utils.translation_from_affine(transform)
-        for isdim, sdim in enumerate(sdims):
-            if isdim < len(transform_translation):
-                origin[sdim] += transform_translation[isdim]
-    position = [origin[dim] for dim in sdims]
-    if positions is None:
-        positions = [position] * nchannels
+    positions, rotations = get_data_mappings(data, transform_key=transform_key, transforms=transforms)
+    position = positions[0]
+    rotation = rotations[0]
 
     if channels is None:
         channels = data.attrs.get('channels', [])
@@ -529,28 +509,33 @@ def save_image(filename, data, transform_key=None, channels=None, positions=None
 
     if 'zar' in params.get('format', 'zar'):
         logging.info('Saving OME-Zarr...')
-        save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, scaler=scaler)
+        save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, rotation, scaler=scaler)
     if 'tif' in params.get('format', 'tif'):
         logging.info('Saving OME-Tiff...')
-        save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, scaler=scaler)
+        save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, rotation, scaler=scaler)
 
 
 def run_operation(params, params_general):
     operation = params['operation']
     filenames = dir_regex(params['input'])
-    if 'match' in operation:
+    operation_parts = operation.split()
+    if 'match' in operation_parts:
+        if len(operation_parts) > operation_parts.index('match') + 1:
+            match_label = operation_parts[-1]
+        else:
+            match_label = 's'
         matches = {}
         for filename in filenames:
             parts = split_underscore_numeric(filename)
-            slice = parts.get('s')
-            if slice is not None:
-                if slice not in matches:
-                    matches[slice] = []
-                matches[slice].append(filename)
+            match_value = parts.get(match_label)
+            if match_value is not None:
+                if match_value not in matches:
+                    matches[match_value] = []
+                matches[match_value].append(filename)
             if len(matches) == 0:
                 matches[0] = filenames
         filesets = list(matches.values())
-        fileset_labels = list(matches.keys())
+        fileset_labels = [match_label + label for label in matches.keys()]
     else:
         filesets = [filenames]
         fileset_labels = ['']
@@ -589,7 +574,9 @@ def run_operation_files(filenames, params, params_general):
         return
 
     input_dir = os.path.dirname(filenames[0])
-    output = os.path.join(input_dir, params['output'])
+    parts = split_underscore_numeric(filenames[0])
+    output_pattern = params['output'].format_map(parts)
+    output = os.path.join(input_dir, output_pattern)
     output_dir = os.path.dirname(output)
     if clear:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -638,9 +625,18 @@ def run_operation_files(filenames, params, params_general):
                        verbose=verbose)
     logging.info(f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}')
     mappings = results['mappings']
-    mappings2 = {get_filetitle(filenames[index]): mapping for index, mapping in mappings.items()}
+    mappings2 = {get_filetitle(filenames[index]): mapping.tolist() for index, mapping in mappings.items()}
+
     with open(output + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
+
+    with open(output + 'mappings.csv', 'w', newline='') as file:
+        csvwriter = csv.writer(file)
+        csvwriter.writerow(['Tile', 'x', 'y', 'z', 'rotation'])
+        for sim, (index, mapping) in zip(sims, mappings.items()):
+            position, rotation = get_data_mapping(sim, transform_key='registered', transform=mapping)
+            csvwriter.writerow([get_filetitle(filenames[index])] + position + [rotation])
+
     if verbose:
         print('Mappings:')
         print(mappings2)
@@ -652,9 +648,8 @@ def run_operation_files(filenames, params, params_general):
                              show_plot=False, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
-    positions = [apply_transform([(0, 0)], np.array(mapping))[0] for mapping in mappings.values()]
     save_image(registered_fused_filename, results['fused_image'], transform_key='registered',
-               channels=channels, positions=positions,
+               channels=channels, transforms=list(mappings.values()),
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
 
 

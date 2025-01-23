@@ -3,7 +3,10 @@ import cv2 as cv
 import glob
 import os
 import re
+from multiview_stitcher import param_utils
+from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 
 def get_default(x, default):
@@ -144,7 +147,7 @@ def split_underscore_numeric(text: str) -> dict:
             index = num_span.start()
             if index > 0:
                 label = part[:index]
-                num_parts[label] = int(num_span.group())
+                num_parts[label] = num_span.group()
     return num_parts
 
 
@@ -244,28 +247,87 @@ def get_center(data, offset=(0, 0)):
     return center.astype(np.float32)
 
 
-def create_transform(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
-    transform = cv.getRotationMatrix2D(center, angle, scale)
+def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
+    transform = cv.getRotationMatrix2D(center[:2], angle, scale)
     transform[:, 2] += translate
     if len(transform) == 2:
         transform = np.vstack([transform, [0, 0, 1]])   # create 3x3 matrix
     return transform
 
 
+def create_transform(center, angle):
+    if len(center) == 2:
+        center = np.array(list(center) + [0])
+    r = Rotation.from_euler('z', angle, degrees=True)
+    t = center - r.apply(center, inverse=True)
+    transform = np.transpose(r.as_matrix())
+    transform = np.hstack([transform, t.reshape(-1, 1)])
+    return transform
+
+
 def apply_transform(points, transform):
     new_points = []
-    point_len = 0
     for point in points:
         point_len = len(point)
-        if point_len == 2:
-            point = list(point) + [1]
-        new_point = np.dot(point, np.transpose(transform))
+        while len(point) < transform.shape[1]:
+            point = list(point) + [0]
+        new_point = np.dot(point, np.transpose(transform))[:point_len]
         new_points.append(new_point)
-    if point_len == 2:
-        new_points = np.array(new_points)[:, :2].tolist()
     return new_points
+
+
+def get_rotation_from_transform(transform):
+    rotation = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
+    return rotation
 
 
 def convert_xyz_to_dict(xyz, axes='xyz'):
     dct = {dim: value for dim, value in zip(axes, xyz)}
     return dct
+
+
+def get_data_mapping(data, transform_key=None, transform=None):
+    sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
+    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
+    nsdims = si_utils.get_nonspatial_dims_from_sim(data)
+
+    origin = si_utils.get_origin_from_sim(data)
+    if transform is None and transform_key is not None:
+        transform = si_utils.get_affine_from_sim(data, transform_key)
+        for nsdim in nsdims:
+            if nsdim in transform.dims:
+                transform = transform.sel(
+                    {
+                        nsdim: transform.coords[nsdim][0]
+                        for nsdim in transform.dims
+                    }
+                )
+        transform = np.array(transform)
+
+    transform = param_utils.invert_coordinate_order(transform)
+    transform[0:len(sdims), 2] += [origin[sdim] for sdim in sdims]
+
+    position = param_utils.translation_from_affine(transform)
+    if len(position) < 3:
+        position = list(position) + [0]
+    rotation = get_rotation_from_transform(transform)
+
+    return position, rotation
+
+
+def get_data_mappings(data, transform_key=None, transforms=None):
+    positions = []
+    rotations = []
+
+    if transforms is not None:
+        for transform in transforms:
+            position, rotation = get_data_mapping(data, transform_key=transform_key, transform=transform)
+            positions.append(position)
+            rotations.append(rotation)
+    else:
+        nchannels = data.sizes.get('c', 1)
+        position, rotation = get_data_mapping(data, transform_key=transform_key)
+        positions = [position] * nchannels
+        rotations = [rotation] * nchannels
+
+    return positions, rotations

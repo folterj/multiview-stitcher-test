@@ -14,12 +14,11 @@ general:
     pyramid_downsample: 2
 
 operations:
-  - operation: match
+  - operation: register match s
     #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
     input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
     fix_missing_rotation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    #output: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/
-    output: D:/slides/EM04654_slice011/stitched/
+    output: ../../../stitched/slice{s}/
