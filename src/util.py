@@ -3,7 +3,7 @@ import cv2 as cv
 import glob
 import os
 import re
-from multiview_stitcher import param_utils
+from multiview_stitcher import msi_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -256,22 +256,22 @@ def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
 
 
 def create_transform(center, angle):
-    if len(center) == 2:
-        center = np.array(list(center) + [0])
+    center = np.array(list(center[:2]) + [1])
     r = Rotation.from_euler('z', angle, degrees=True)
     t = center - r.apply(center, inverse=True)
     transform = np.transpose(r.as_matrix())
-    transform = np.hstack([transform, t.reshape(-1, 1)])
+    transform[:, -1] += t
     return transform
 
 
 def apply_transform(points, transform):
     new_points = []
     for point in points:
-        point_len = len(point)
-        while len(point) < transform.shape[1]:
-            point = list(point) + [0]
-        new_point = np.dot(point, np.transpose(transform))[:point_len]
+        extra = point[2:] if len(point) > 2 else None
+        point = list(point[:2]) + [1]
+        new_point = np.dot(point, np.transpose(transform))[:2]
+        if extra is not None:
+            new_point = np.array(list(new_point) + list(extra))
         new_points.append(new_point)
     return new_points
 
@@ -286,41 +286,48 @@ def convert_xyz_to_dict(xyz, axes='xyz'):
     return dct
 
 
-def get_data_mapping(data, transform_key=None, transform=None):
-    sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
-    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
-    nsdims = si_utils.get_nonspatial_dims_from_sim(data)
-
-    origin = si_utils.get_origin_from_sim(data)
-    if transform is None and transform_key is not None:
-        transform = si_utils.get_affine_from_sim(data, transform_key)
-        for nsdim in nsdims:
-            if nsdim in transform.dims:
-                transform = transform.sel(
-                    {
-                        nsdim: transform.coords[nsdim][0]
-                        for nsdim in transform.dims
-                    }
-                )
-        transform = np.array(transform)
-
-    transform = param_utils.invert_coordinate_order(transform)
-    transform[0:len(sdims), 2] += [origin[sdim] for sdim in sdims]
-
-    position = param_utils.translation_from_affine(transform)
-    if len(position) < 3:
-        position = list(position) + [0]
+def get_translation_rotation_from_transform(transform, invert=False):
+    if len(transform.shape) == 3:
+        transform = transform[0]
+    if invert:
+        transform = param_utils.invert_coordinate_order(transform)
+    transform = np.array(transform)
+    translation = param_utils.translation_from_affine(transform)
     rotation = get_rotation_from_transform(transform)
+    return translation, rotation
 
-    return position, rotation
+
+def get_data_mapping(sim, msim, transform_key=None, transform=None, rotation=None):
+    if rotation is None:
+        rotation = 0
+
+    sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
+    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
+    origin = si_utils.get_origin_from_sim(sim)
+    translation = [origin[sdim] for sdim in sdims]
+
+    translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+    translation = translation + translation1
+    rotation += rotation1
+
+    if transform_key is not None:
+        transform = msi_utils.get_transform_from_msim(msim, transform_key)
+        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+        translation += translation1
+        rotation += rotation1
+
+    if len(translation) == 2:
+        translation = list(translation) + [0]
+
+    return translation, rotation
 
 
-def get_data_mappings(data, transform_key=None, transforms=None):
+def get_data_mappings(data, transform_key=None, translations=None):
     positions = []
     rotations = []
 
-    if transforms is not None:
-        for transform in transforms:
+    if translations is not None:
+        for transform in translations:
             position, rotation = get_data_mapping(data, transform_key=transform_key, transform=transform)
             positions.append(position)
             rotations.append(rotation)

@@ -16,8 +16,9 @@ general:
 operations:
   - operation: register match s
     #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-    input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
-    fix_missing_rotation: True
+    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+    input: C:/temp/sbemimage_test/tiles/g0000/t????/*.ome.tif
+    normalise_orientation: False
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation

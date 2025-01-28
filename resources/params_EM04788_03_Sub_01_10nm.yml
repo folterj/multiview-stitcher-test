@@ -16,168 +16,168 @@ general:
 operations:
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section1/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section2/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section3/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section4/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section5/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section6/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section7/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section8/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section9/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section10/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section11/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section12/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section13/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section14/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section15/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section16/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section17/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section18/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section19/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section20/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section21/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section22/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section23/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section24/.*_t\d{4}.*.tif
-    fix_missing_rotation: True
+    normalise_orientation: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
