@@ -99,8 +99,37 @@ class OmeSource:
             if 'PositionZ' in plane:
                 position.append((float(plane.get('PositionZ')), plane.get('PositionZUnit')))
             #c, z, t = plane.get('TheC'), plane.get('TheZ'), plane.get('TheT')
-
         self.position = position
+
+        rotation = None
+        annotations = self.metadata.get('StructuredAnnotations')
+        if annotations is not None:
+            if not isinstance(annotations, (list, tuple)):
+                annotations = [annotations]
+            for annotation_item in annotations:
+                for annotation in annotation_item.values():
+                    value = annotation.get('Value')
+                    unit = None
+                    if isinstance(value, dict) and 'Modulo' in value:
+                        modulo = value.get('Modulo', {}).get('ModuloAlongZ', {})
+                        unit = modulo.get('Unit')
+                        value = modulo.get('Label')
+                    elif isinstance(value, str) and value.lower().startswith('angle'):
+                        if ':' in value:
+                            value = value.split(':')[1].split()
+                        elif '=' in value:
+                            value = value.split('=')[1].split()
+                        else:
+                            value = value.split()[1:]
+                        if len(value) >= 2:
+                            unit = value[1]
+                        value = value[0]
+                    if value is not None:
+                        rotation = float(value)
+                        if 'rad' in unit.lower():
+                            rotation = np.rad2deg(rotation)
+        self.rotation = rotation
+
         self.source_mag = 0
         objective_id = images.get('ObjectiveSettings', {}).get('ID', '')
         for objective in ensure_list(self.metadata.get('Instrument', {}).get('Objective', [])):
