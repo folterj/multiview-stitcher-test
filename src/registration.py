@@ -97,7 +97,7 @@ def init_tiles(files, flatfield_quantile=None,
             translation = np.array(get_value_units_micrometer(source.position))
             if invert_x_coordinates:
                 translation[0] = -translation[0]
-            translation[1] = -translation[1]
+                translation[1] = -translation[1]
         translations.append(translation)
         rotations.append(source.rotation)
 
@@ -111,17 +111,17 @@ def init_tiles(files, flatfield_quantile=None,
     for source, image, translation, rotation in zip(sources, images, translations, rotations):
         # transform #dimensions need to match
         scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
-        translation = convert_xyz_to_dict(translation)
+        translation_dict = convert_xyz_to_dict(translation)
         channel_labels = [channel.get('label', '') for channel in source.get_channels()]
         if rotation is None or normalise_orientation:
             transform = None
         else:
-            transform = param_utils.invert_coordinate_order(create_transform((0, 0), rotation))
+            transform = param_utils.invert_coordinate_order(create_transform(translation, rotation))
         sim = si_utils.get_sim_from_array(
             image,
             dims=list(output_order),
             scale=scale,
-            translation=translation,
+            translation=translation_dict,
             affine=transform,
             transform_key="stage_metadata",
             c_coords=channel_labels
@@ -143,8 +143,8 @@ def normalise_rotated_positions(positions0, rotations0, size):
         mean_angle = np.mean(angles)
         for position0, rotation in zip(positions0, rotations0):
             if rotation is None:
-                rotation = mean_angle
-            transform = create_transform(center=center_position, angle=rotation)
+                rotation = -mean_angle
+            transform = create_transform(center=center_position, angle=-rotation)
             position = apply_transform([position0], transform)[0]
             positions.append(position)
             rotations.append(rotation)
@@ -179,6 +179,7 @@ def normalise(sims, use_global=True):
             scale=si_utils.get_spacing_from_sim(sim),
             translation=si_utils.get_origin_from_sim(sim),
             transform_key='stage_metadata',
+            affine=si_utils.get_affine_from_sim(sim, 'stage_metadata'),
             c_coords=sim.c
         )
         new_sims.append(new_sim)
@@ -436,16 +437,16 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
                          for mapping in mappings_dict.values()]
 
-            if is_channel_overlay:
+            if len(sims0) > 2:
+                # Coefficient of variation
+                cvar = np.std(distances) / np.mean(distances)
+                confidence = 1 - min(cvar / 10, 1)
+            else:
                 sim0 = sims0[0]
                 spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
                 size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
                 norm_distance = np.sum(distances) / np.linalg.norm(size)
                 confidence = 1 - min(math.sqrt(norm_distance), 1)
-            else:
-                # Coefficient of variation
-                cvar = np.std(distances) / np.mean(distances)
-                confidence = 1 - min(cvar / 10, 1)
 
             for msim, msim0 in zip(msims, msims0):
                 msi_utils.set_affine_transform(
@@ -502,13 +503,13 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             'fused_image': fused_image}
 
 
-def save_image(filename, data, transform_key=None, channels=None, rotations=None,
+def save_image(filename, data, transform_key=None, channels=None,
                npyramid_add=4, pyramid_downsample=2, params={}):
     dimension_order = ''.join(data.dims)
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
     pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
-    positions = get_data_mappings(data, transform_key=transform_key)    # metadata: only use coords of fused image
+    positions, rotations = get_data_mappings(msi_utils.get_msim_from_sim(data), transform_key=transform_key)    # metadata: only use coords of fused image
     position = positions[0]
     rotation = rotations[0]
 
@@ -635,23 +636,33 @@ def run_operation_files(filenames, params, params_general):
                        use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, extra_metadata=extra_metadata,
                        verbose=verbose)
     msims = results['msims']
-    logging.info(f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}')
     mappings = results['mappings']
     mappings2 = {get_filetitle(filenames[index]): mapping.tolist() for index, mapping in mappings.items()}
+    metrics = f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}'
+    logging.info(metrics)
 
     with open(output + 'mappings.json', 'w') as file:
         json.dump(mappings2, file, indent=4)
 
     with open(output + 'mappings.csv', 'w', newline='') as file:
         csvwriter = csv.writer(file)
-        csvwriter.writerow(['Tile', 'x', 'y', 'z', 'rotation'])
-        for sim, msim, (index, mapping), rotation in zip(sims, msims, mappings.items(), rotations):
+        header = ['Tile', 'x', 'y', 'z', 'rotation']
+        csvwriter.writerow(header)
+        if verbose:
+            print(header)
+        for msim, (index, mapping), rotation in zip(msims, mappings.items(), rotations):
             if not normalise_orientation:
                 # rotation already in msim affine transform
                 rotation = None
-            position, rotation = get_data_mapping(sim, msim, transform_key='registered',
+            position, rotation = get_data_mapping(msim, transform_key='registered',
                                                   transform=mapping, rotation=rotation)
-            csvwriter.writerow([get_filetitle(filenames[index])] + list(position) + [rotation])
+            row = [get_filetitle(filenames[index])] + list(position) + [rotation]
+            csvwriter.writerow(row)
+            if verbose:
+                print(row)
+
+    with open(output + 'metrics.txt', 'w') as file:
+        file.write(metrics)
 
     if verbose:
         print('Mappings:')
@@ -664,8 +675,7 @@ def run_operation_files(filenames, params, params_general):
                              show_plot=False, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
-    save_image(registered_fused_filename, results['fused_image'], transform_key='registered',
-               channels=channels, rotations=rotations,
+    save_image(registered_fused_filename, results['fused_image'], transform_key='registered', channels=channels,
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
 
 

@@ -297,18 +297,20 @@ def get_translation_rotation_from_transform(transform, invert=False):
     return translation, rotation
 
 
-def get_data_mapping(sim, msim, transform_key=None, transform=None, rotation=None):
+def get_data_mapping(msim, transform_key=None, transform=None, rotation=None):
     if rotation is None:
         rotation = 0
 
+    sim = msi_utils.get_sim_from_msim(msim)
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
     origin = si_utils.get_origin_from_sim(sim)
     translation = [origin[sdim] for sdim in sdims]
 
-    translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
-    translation = translation + translation1
-    rotation += rotation1
+    if transform is not None:
+        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+        translation = translation + translation1
+        rotation += rotation1
 
     if transform_key is not None:
         transform = msi_utils.get_transform_from_msim(msim, transform_key)
@@ -322,19 +324,10 @@ def get_data_mapping(sim, msim, transform_key=None, transform=None, rotation=Non
     return translation, rotation
 
 
-def get_data_mappings(data, transform_key=None, translations=None):
-    positions = []
-    rotations = []
-
-    if translations is not None:
-        for transform in translations:
-            position, rotation = get_data_mapping(data, transform_key=transform_key, transform=transform)
-            positions.append(position)
-            rotations.append(rotation)
-    else:
-        nchannels = data.sizes.get('c', 1)
-        position, rotation = get_data_mapping(data, transform_key=transform_key)
-        positions = [position] * nchannels
-        rotations = [rotation] * nchannels
+def get_data_mappings(data, transform_key=None):
+    nchannels = data.sizes.get('c', 1)
+    position, rotation = get_data_mapping(data, transform_key=transform_key)
+    positions = [position] * nchannels
+    rotations = [rotation] * nchannels
 
     return positions, rotations

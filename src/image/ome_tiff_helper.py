@@ -4,10 +4,10 @@ from src.image.color_conversion import rgba_to_int
 from src.util import *
 
 
-def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
+def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[], rotation=None,
                   tile_size=(1024, 1024), compression='LZW', scaler=None):
 
-    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, positions, channels, is_ome=True)
+    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, channels, positions, is_ome=True)
 
     if scaler is not None:
         npyramid_add = scaler.max_layer
@@ -46,7 +46,7 @@ def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[],
                          resolution=resolution, resolutionunit=resolutionunit, metadata=metadata)
 
 
-def create_tiff_metadata(pixel_size, positions=[], channels=[], is_ome=False):
+def create_tiff_metadata(pixel_size, channels=[], positions=[], rotation=None, is_ome=False):
     ome_metadata = None
     resolution = None
     resolution_unit = None
@@ -78,6 +78,8 @@ def create_tiff_metadata(pixel_size, positions=[], channels=[], is_ome=False):
                 plane_metadata['PositionZ'] = [float(position[2]) for position in positions]
                 plane_metadata['PositionZUnit'] = ['µm' for _ in positions]
             ome_metadata['Plane'] = plane_metadata
+        if rotation is not None:
+            ome_metadata['StructuredAnnotations'] = {'CommentAnnotation': {'Value': f'Angle: {rotation} degrees'}}
         for channeli, channel in enumerate(channels):
             ome_channel = {'Name': channel.get('label', str(channeli))}
             if 'color' in channel:
