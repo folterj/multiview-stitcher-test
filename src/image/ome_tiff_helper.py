@@ -7,7 +7,8 @@ from src.util import *
 def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[], rotation=None,
                   tile_size=(1024, 1024), compression='LZW', scaler=None):
 
-    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, channels, positions, is_ome=True)
+    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, channels, positions, rotation,
+                                                                       is_ome=True)
 
     if scaler is not None:
         npyramid_add = scaler.max_layer

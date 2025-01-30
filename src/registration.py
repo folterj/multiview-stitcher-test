@@ -91,10 +91,10 @@ def init_tiles(files, flatfield_quantile=None,
     translations = []
     rotations = []
     for source, image in zip(sources, images):
-        if reset_coordinates:
+        if reset_coordinates or len(source.get_position()) == 0:
             translation = np.zeros(3)
         else:
-            translation = np.array(get_value_units_micrometer(source.position))
+            translation = np.array(source.get_position_micrometer())
             if invert_x_coordinates:
                 translation[0] = -translation[0]
                 translation[1] = -translation[1]
@@ -128,7 +128,7 @@ def init_tiles(files, flatfield_quantile=None,
         )
         sims.append(sim)
 
-    return sims, rotations
+    return sims, translations, rotations
 
 
 def normalise_rotated_positions(positions0, rotations0, size):
@@ -503,15 +503,17 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             'fused_image': fused_image}
 
 
-def save_image(filename, data, transform_key=None, channels=None,
+def save_image(filename, data, transform_key=None, channels=None, translation0=None,
                npyramid_add=4, pyramid_downsample=2, params={}):
     dimension_order = ''.join(data.dims)
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
     pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
-    positions, rotations = get_data_mappings(msi_utils.get_msim_from_sim(data), transform_key=transform_key)    # metadata: only use coords of fused image
-    position = positions[0]
-    rotation = rotations[0]
+    # metadata: only use coords of fused image
+    position, rotation = get_data_mapping(msi_utils.get_msim_from_sim(data), transform_key=transform_key,
+                                          translation0=translation0)
+    nchannels = data.sizes.get('c', 1)
+    positions = [position] * nchannels
 
     if channels is None:
         channels = data.attrs.get('channels', [])
@@ -601,11 +603,11 @@ def run_operation_files(filenames, params, params_general):
     registered_fused_filename = output + 'registered'
 
     logging.info('Initialising tiles...')
-    sims, rotations = init_tiles(filenames, flatfield_quantile=flatfield_quantile,
-                                 invert_x_coordinates=invert_x_coordinates,
-                                 normalise_orientation=normalise_orientation,
-                                 reset_coordinates=reset_coordinates,
-                                 verbose=verbose)
+    sims, positions, rotations = init_tiles(filenames, flatfield_quantile=flatfield_quantile,
+                                            invert_x_coordinates=invert_x_coordinates,
+                                            normalise_orientation=normalise_orientation,
+                                            reset_coordinates=reset_coordinates,
+                                            verbose=verbose)
 
     if len(filenames) == 1:
         logging.warning('Skipping registration (single tile)')
@@ -650,12 +652,12 @@ def run_operation_files(filenames, params, params_general):
         csvwriter.writerow(header)
         if verbose:
             print(header)
-        for msim, (index, mapping), rotation in zip(msims, mappings.items(), rotations):
+        for msim, (index, mapping), position, rotation in zip(msims, mappings.items(), positions, rotations):
             if not normalise_orientation:
                 # rotation already in msim affine transform
                 rotation = None
             position, rotation = get_data_mapping(msim, transform_key='registered',
-                                                  transform=mapping, rotation=rotation)
+                                                  transform=mapping, translation0=position, rotation=rotation)
             row = [get_filetitle(filenames[index])] + list(position) + [rotation]
             csvwriter.writerow(row)
             if verbose:
@@ -675,7 +677,8 @@ def run_operation_files(filenames, params, params_general):
                              show_plot=False, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
-    save_image(registered_fused_filename, results['fused_image'], transform_key='registered', channels=channels,
+    save_image(registered_fused_filename, results['fused_image'],
+               transform_key='registered', channels=channels, translation0=positions[0],
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
 
 

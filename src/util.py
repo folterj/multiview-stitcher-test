@@ -293,11 +293,13 @@ def get_translation_rotation_from_transform(transform, invert=False):
         transform = param_utils.invert_coordinate_order(transform)
     transform = np.array(transform)
     translation = param_utils.translation_from_affine(transform)
+    if len(translation) == 2:
+        translation = list(translation) + [0]
     rotation = get_rotation_from_transform(transform)
     return translation, rotation
 
 
-def get_data_mapping(msim, transform_key=None, transform=None, rotation=None):
+def get_data_mapping(msim, transform_key=None, transform=None, translation0=None, rotation=None):
     if rotation is None:
         rotation = 0
 
@@ -307,27 +309,22 @@ def get_data_mapping(msim, transform_key=None, transform=None, rotation=None):
     origin = si_utils.get_origin_from_sim(sim)
     translation = [origin[sdim] for sdim in sdims]
 
+    if len(translation) == 2:
+        if translation0 is not None and len (translation0) == 3:
+            z = translation0[2]
+        else:
+            z = 0
+        translation = list(translation) + [z]
+
     if transform is not None:
         translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
-        translation = translation + translation1
+        translation = np.array(translation) + translation1
         rotation += rotation1
 
     if transform_key is not None:
-        transform = msi_utils.get_transform_from_msim(msim, transform_key)
-        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
-        translation += translation1
+        transform1 = msi_utils.get_transform_from_msim(msim, transform_key)
+        translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
         rotation += rotation1
-
-    if len(translation) == 2:
-        translation = list(translation) + [0]
 
     return translation, rotation
 
-
-def get_data_mappings(data, transform_key=None):
-    nchannels = data.sizes.get('c', 1)
-    position, rotation = get_data_mapping(data, transform_key=transform_key)
-    positions = [position] * nchannels
-    rotations = [rotation] * nchannels
-
-    return positions, rotations

@@ -36,6 +36,8 @@ class OmeSource:
     """channel information for all image channels"""
     position: list
     """source position information"""
+    rotation: float
+    """source rotation information"""
 
     default_properties_order = 'xyzct'
     default_physical_unit = 'µm'
@@ -243,8 +245,14 @@ class OmeSource:
     def get_pixel_size_micrometer(self):
         return get_value_units_micrometer(self.get_pixel_size())
 
+    def get_position(self) -> list:
+        return self.position
+
     def get_position_micrometer(self):
-        return get_value_units_micrometer(self.position)
+        return get_value_units_micrometer(self.get_position())
+
+    def get_rotation(self) -> float:
+        return self.rotation
 
     def get_shape(self, dimension_order: str = None, xyzct: tuple = None) -> tuple:
         shape = []
@@ -337,10 +345,12 @@ class OmeSource:
                     tot_alpha += alpha
             if tot_alpha != 1:
                 total_image /= tot_alpha
-            final_image = float2int_image(total_image)
+            final_image = float2int_image(total_image,
+                                          target_dtype=image.dtype)
         elif needs_normalisation:
             window = self.get_channel_window(0)
-            final_image = float2int_image(normalise_values(image, window['min'], window['max']))
+            final_image = float2int_image(normalise_values(image, window['min'], window['max']),
+                                          target_dtype=image.dtype)
         else:
             final_image = image
         return final_image
