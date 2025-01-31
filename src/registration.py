@@ -99,7 +99,7 @@ def init_tiles(files, flatfield_quantile=None,
                 translation[0] = -translation[0]
                 translation[1] = -translation[1]
         translations.append(translation)
-        rotations.append(source.rotation)
+        rotations.append(source.get_rotation())
 
     if normalise_orientation:
         source0 = sources[0]
@@ -150,6 +150,7 @@ def normalise_rotated_positions(positions0, rotations0, size):
             rotations.append(rotation)
     else:
         positions = positions0
+        rotations = rotations0
     return positions, rotations
 
 
@@ -534,6 +535,8 @@ def run_operation(params, params_general):
     filenames = dir_regex(params['input'])
     operation_parts = operation.split()
     if 'match' in operation_parts:
+        # sort last key first
+        filenames = sorted(filenames, key=lambda file: list(reversed(find_all_numbers(get_filetitle(file)))))
         if len(operation_parts) > operation_parts.index('match') + 1:
             match_label = operation_parts[-1]
         else:
@@ -574,7 +577,7 @@ def run_operation_files(filenames, params, params_general):
     reg_channel = params.get('channel', 0)
     extra_metadata = params.get('extra_metadata', {})
     channels = extra_metadata.get('channels', [])
-    clear = params_general['output'].get('clear', False)
+    clear = output_params.get('clear', False)
 
     show_original = params_general.get('show_original', False)
     npyramid_add = params_general.get('npyramid_add', 0)
@@ -611,8 +614,8 @@ def run_operation_files(filenames, params, params_general):
 
     if len(filenames) == 1:
         logging.warning('Skipping registration (single tile)')
-        save_image(registered_fused_filename, sims[0], channels=channels,
-                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
+        save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
+                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
         return
 
     if show_original:
@@ -679,7 +682,7 @@ def run_operation_files(filenames, params, params_general):
     logging.info('Saving fused image...')
     save_image(registered_fused_filename, results['fused_image'],
                transform_key='registered', channels=channels, translation0=positions[0],
-               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=params_general['output'])
+               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
 
 def run(params):
