@@ -95,11 +95,11 @@ class OmeSource:
         for plane in ensure_list(pixels.get('Plane', [])):
             position = []
             if 'PositionX' in plane:
-                position.append((float(plane.get('PositionX')), plane.get('PositionXUnit')))
+                position.append((float(plane.get('PositionX')), plane.get('PositionXUnit', self.default_physical_unit)))
             if 'PositionY' in plane:
-                position.append((float(plane.get('PositionY')), plane.get('PositionYUnit')))
+                position.append((float(plane.get('PositionY')), plane.get('PositionYUnit', self.default_physical_unit)))
             if 'PositionZ' in plane:
-                position.append((float(plane.get('PositionZ')), plane.get('PositionZUnit')))
+                position.append((float(plane.get('PositionZ')), plane.get('PositionZUnit', self.default_physical_unit)))
             #c, z, t = plane.get('TheC'), plane.get('TheZ'), plane.get('TheT')
         self.position = position
 
