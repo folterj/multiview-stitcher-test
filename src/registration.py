@@ -312,7 +312,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     channels = extra_metadata.get('channels', [])
     z_scale = extra_metadata.get('scale', {}).get('z', 1)
     is_stack = ('stack' in operation)
-    is_channel_overlay = (len(channels) > 0)
+    is_channel_overlay = (len(channels) > 1)
     # normalisation
     if normalisation:
         use_global = not is_channel_overlay
@@ -533,6 +533,10 @@ def save_image(filename, data, transform_key=None, channels=None, translation0=N
 def run_operation(params, params_general):
     operation = params['operation']
     filenames = dir_regex(params['input'])
+    if len(filenames) == 0:
+        logging.warning(f'Skipping operation {operation} (no files)')
+        return
+
     operation_parts = operation.split()
     if 'match' in operation_parts:
         # sort last key first
