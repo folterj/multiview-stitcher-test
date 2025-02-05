@@ -219,3 +219,7 @@ class TiffSource(OmeSource):
         slices = get_numpy_slicing(self.get_dimension_order(), **slicing)
         out = redim[slices]
         return out
+
+    def close(self):
+        self.tiff.close()
+        self.fh.close()

@@ -6,7 +6,7 @@ from src.image.util import create_compression_filter
 from src.image.ome_zarr_util import create_axes_metadata, create_transformation_metadata, create_channel_ome_metadata
 
 
-def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, translation,
+def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, translation, rotation,
                   tile_size=(256, 256), compression=None,
                   scaler=None, zarr_version=2, ome_version='0.4'):
 
@@ -30,7 +30,8 @@ def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, transla
     coordinate_transformations = []
     scale = 1
     for i in range(npyramid_add + 1):
-        coordinate_transformations.append(create_transformation_metadata(dimension_order, pixel_size, scale, translation))
+        transform = create_transformation_metadata(dimension_order, pixel_size, scale, translation, rotation)
+        coordinate_transformations.append(transform)
         if pyramid_downsample:
             scale /= pyramid_downsample
 

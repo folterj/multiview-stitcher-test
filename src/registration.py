@@ -14,8 +14,6 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
 import numpy as np
 import os
-from ome_zarr.scale import Scaler
-import re
 import shutil
 from sklearn.neighbors import KDTree
 from tqdm import tqdm
@@ -23,8 +21,7 @@ import xarray as xr
 
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
-from src.image.ome_tiff_helper import save_ome_tiff
-from src.image.ome_zarr_helper import save_ome_zarr
+from src.image.ome_helper import save_image
 from src.image.util import *
 from src.util import *
 
@@ -64,7 +61,7 @@ def create_source(filename):
 
 
 def init_tiles(files, flatfield_quantile=None,
-               invert_x_coordinates=False, normalise_orientation=False, reset_coordinates=True,
+               invert_x_coordinates=False, normalise_orientation=False, reset_coordinates=False,
                verbose=False):
     sims = []
     sources = [create_source(file) for file in files]
@@ -72,7 +69,7 @@ def init_tiles(files, flatfield_quantile=None,
     images = []
     logging.info('Init tiles...')
     for source in tqdm(sources, disable=not verbose):
-        output_order = 'yx'
+        output_order = 'zyx'
         if source.get_nchannels() > 1:
             output_order += 'c'
         image = redimension_data(source.get_source_dask()[0],
@@ -110,8 +107,12 @@ def init_tiles(files, flatfield_quantile=None,
 
     for source, image, translation, rotation in zip(sources, images, translations, rotations):
         # transform #dimensions need to match
-        scale = convert_xyz_to_dict(source.get_pixel_size_micrometer())
+        scale_dict = convert_xyz_to_dict(source.get_pixel_size_micrometer())
+        if len(scale_dict) > 0 and 'z' not in scale_dict:
+            scale_dict['z'] = 1
         translation_dict = convert_xyz_to_dict(translation)
+        if len(translation_dict) > 0 and 'z' not in translation_dict:
+            translation_dict['z'] = 0
         channel_labels = [channel.get('label', '') for channel in source.get_channels()]
         if rotation is None or normalise_orientation:
             transform = None
@@ -120,13 +121,14 @@ def init_tiles(files, flatfield_quantile=None,
         sim = si_utils.get_sim_from_array(
             image,
             dims=list(output_order),
-            scale=scale,
+            scale=scale_dict,
             translation=translation_dict,
             affine=transform,
             transform_key="stage_metadata",
             c_coords=channel_labels
         )
         sims.append(sim)
+        source.close()
 
     return sims, translations, rotations
 
@@ -277,6 +279,8 @@ def pairwise_registration_cpd(
     fixed_data, moving_data,
     **kwargs, # additional keyword arguments passed `pairwise_reg_func_kwargs`
     ) -> dict:
+    from probreg import cpd
+
     max_iter = kwargs.get('max_iter', 1000)
 
     fixed_points = points_to_3d([point for point, area in detect_area_points(fixed_data.data)])
@@ -361,7 +365,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     if verbose:
         progress = tqdm()
 
-    if 'stack' in operation:
+    if is_stack:
         pairs = [(index, index + 1) for index in range(len(register_msims) - 1)]
     elif use_orthogonal_pairs:
         register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
@@ -379,7 +383,6 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             elif 'feature' in method:
                 pairwise_reg_func = pairwise_registration_features
             elif 'cpd' in method:
-                from probreg import cpd
                 pairwise_reg_func = pairwise_registration_cpd
             elif 'ant' in method:
                 pairwise_reg_func = registration.registration_ANTsPy
@@ -502,32 +505,6 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             'confidence': confidence,
             'msims': msims0,
             'fused_image': fused_image}
-
-
-def save_image(filename, data, transform_key=None, channels=None, translation0=None,
-               npyramid_add=4, pyramid_downsample=2, params={}):
-    dimension_order = ''.join(data.dims)
-    sdims = ''.join(si_utils.get_spatial_dims_from_sim(data))
-    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
-    pixel_size = [si_utils.get_spacing_from_sim(data)[dim] for dim in sdims]
-    # metadata: only use coords of fused image
-    position, rotation = get_data_mapping(msi_utils.get_msim_from_sim(data), transform_key=transform_key,
-                                          translation0=translation0)
-    nchannels = data.sizes.get('c', 1)
-    positions = [position] * nchannels
-
-    if channels is None:
-        channels = data.attrs.get('channels', [])
-
-    npyramid_add = get_max_downsamples(data.shape, npyramid_add, pyramid_downsample)
-    scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
-
-    if 'zar' in params.get('format', 'zar'):
-        logging.info('Saving OME-Zarr...')
-        save_ome_zarr(filename + '.ome.zarr', data.data, dimension_order, pixel_size, channels, position, rotation, scaler=scaler)
-    if 'tif' in params.get('format', 'tif'):
-        logging.info('Saving OME-Tiff...')
-        save_ome_tiff(filename + '.ome.tiff', data.data, pixel_size, channels, positions, rotation, scaler=scaler)
 
 
 def run_operation(params, params_general):

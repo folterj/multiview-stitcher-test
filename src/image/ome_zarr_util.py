@@ -23,7 +23,7 @@ def create_axes_metadata(dimension_order):
     return axes
 
 
-def create_transformation_metadata(dimension_order, pixel_size_um, scale, translation_um=[]):
+def create_transformation_metadata(dimension_order, pixel_size_um, scale, translation_um=[], rotation=None):
     metadata = []
     pixel_size_scale = []
     translation_scale = []
@@ -53,6 +53,9 @@ def create_transformation_metadata(dimension_order, pixel_size_um, scale, transl
     metadata.append({'type': 'scale', 'scale': pixel_size_scale})
     if not all(v == 0 for v in translation_scale):
         metadata.append({'type': 'translation', 'translation': translation_scale})
+    # Supported in ome-zarr V0.6
+    #if rotation is not None:
+    #    metadata.append({'type': 'rotation', 'rotation': rotation})
     return metadata
 
 

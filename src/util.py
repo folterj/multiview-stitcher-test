@@ -1,11 +1,12 @@
 import ast
 import cv2 as cv
 import glob
-import os
-import re
+from multiscale_spatial_image import MultiscaleSpatialImage
 from multiview_stitcher import msi_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
+import os
+import re
 from scipy.spatial.transform import Rotation
 
 
@@ -256,7 +257,8 @@ def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
 
 
 def create_transform(center, angle):
-    center = np.array(list(center[:2]) + [1])
+    if len(center) == 2:
+        center = np.array(list(center) + [1])
     r = Rotation.from_euler('z', angle, degrees=True)
     t = center - r.apply(center, inverse=True)
     transform = np.transpose(r.as_matrix())
@@ -267,11 +269,12 @@ def create_transform(center, angle):
 def apply_transform(points, transform):
     new_points = []
     for point in points:
-        extra = point[2:] if len(point) > 2 else None
-        point = list(point[:2]) + [1]
-        new_point = np.dot(point, np.transpose(transform))[:2]
-        if extra is not None:
-            new_point = np.array(list(new_point) + list(extra))
+        point_len = len(point)
+        if point_len == 2:
+            point = list(point) + [1]
+        new_point = np.dot(point, np.transpose(transform))
+        if point_len == 2:
+            new_point = new_point[:2]
         new_points.append(new_point)
     return new_points
 
@@ -299,11 +302,14 @@ def get_translation_rotation_from_transform(transform, invert=False):
     return translation, rotation
 
 
-def get_data_mapping(msim, transform_key=None, transform=None, translation0=None, rotation=None):
+def get_data_mapping(data, transform_key=None, transform=None, translation0=None, rotation=None):
     if rotation is None:
         rotation = 0
 
-    sim = msi_utils.get_sim_from_msim(msim)
+    if isinstance(data, MultiscaleSpatialImage):
+        sim = msi_utils.get_sim_from_msim(data)
+    else:
+        sim = data
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
     origin = si_utils.get_origin_from_sim(sim)
@@ -322,9 +328,8 @@ def get_data_mapping(msim, transform_key=None, transform=None, translation0=None
         rotation += rotation1
 
     if transform_key is not None:
-        transform1 = msi_utils.get_transform_from_msim(msim, transform_key)
+        transform1 = sim.transforms[transform_key]
         translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
         rotation += rotation1
 
     return translation, rotation
-

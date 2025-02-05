@@ -4,11 +4,11 @@ from src.image.color_conversion import rgba_to_int
 from src.util import *
 
 
-def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[], rotation=None,
+def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], positions=[], rotation=None,
                   tile_size=(1024, 1024), compression='LZW', scaler=None):
 
-    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, channels, positions, rotation,
-                                                                       is_ome=True)
+    ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, dimension_order,
+                                                                       channels, positions, rotation, is_ome=True)
 
     if scaler is not None:
         npyramid_add = scaler.max_layer
@@ -29,7 +29,7 @@ def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[], rotatio
                 subifds = npyramid_add
                 subfiletype = None
                 metadata = ome_metadata
-                resolution = resolution0
+                resolution = resolution0[:2]
                 resolutionunit = resolution_unit0
             else:
                 subifds = None
@@ -47,7 +47,7 @@ def save_ome_tiff(filename, data, pixel_size, channels=[], positions=[], rotatio
                          resolution=resolution, resolutionunit=resolutionunit, metadata=metadata)
 
 
-def create_tiff_metadata(pixel_size, channels=[], positions=[], rotation=None, is_ome=False):
+def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], positions=[], rotation=None, is_ome=False):
     ome_metadata = None
     resolution = None
     resolution_unit = None
@@ -60,6 +60,9 @@ def create_tiff_metadata(pixel_size, channels=[], positions=[], rotation=None, i
 
     if is_ome:
         ome_metadata = {'Creator': 'multiview-stitcher'}
+        if dimension_order is not None:
+            #ome_metadata['DimensionOrder'] = dimension_order[::-1].upper()
+            ome_metadata['axes'] = dimension_order.upper()
         ome_channels = []
         if pixel_size_um is not None:
             ome_metadata['PhysicalSizeX'] = float(pixel_size_um[0])
