@@ -7,10 +7,11 @@ from tempfile import TemporaryDirectory
 import xarray as xr
 
 from src.image.ome_helper import save_image
-from src.TiffSource import TiffSource
 from src.image.ome_tiff_helper import save_ome_tiff
+from src.TiffSource import TiffSource
 from src.registration import init_tiles
-from src.util import convert_xyz_to_dict
+from src.util import *
+from src.image.util import *
 
 
 def test_channels(filename):
@@ -54,9 +55,11 @@ def test_pipeline(tmp_path, nfiles=2):
     z_scale = 0.5
 
     filenames = []
+    z_position = 0
     for filei in range(nfiles):
         filename = tmp_path / datetime.now().strftime('%Y%m%d_%H%M%S_%f.ome.tiff')
-        position = np.random.rand(3)
+        position = list(np.random.rand(2)) + [z_position]
+        z_position += z_scale
         data = xr.DataArray(
             da.random.randint(0, 65535, size=size, chunks=chunks, dtype=da.uint16),
             dims=list(dimension_order)

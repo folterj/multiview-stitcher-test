@@ -10,7 +10,12 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     dimension_order = ''.join(sim.dims)
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
-    pixel_size = [si_utils.get_spacing_from_sim(sim)[dim] for dim in sdims]
+    pixel_size = []
+    for dim in sdims:
+        pixel_size1 = si_utils.get_spacing_from_sim(sim)[dim]
+        if pixel_size1 == 0:
+            pixel_size1 = 1
+        pixel_size.append(pixel_size1)
     # metadata: only use coords of fused image
     position, rotation = get_data_mapping(sim, transform_key=transform_key,
                                           translation0=translation0)
