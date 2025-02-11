@@ -1,9 +1,11 @@
 from datetime import datetime
 import dask.array as da
-from multiview_stitcher import spatial_image_utils as si_utils, fusion
+from multiview_stitcher import fusion
+from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import traceback
 import xarray as xr
 
 from src.image.ome_helper import save_image
@@ -47,7 +49,7 @@ def test_zstack(filename):
     save_image(filename, sim)
 
 
-def test_pipeline(tmp_path, nfiles=2):
+def test_init_tiles(tmp_path, nfiles=2):
     dimension_order = 'yx'
     size = (1024, 1024)
     chunks = (256, 256)
@@ -67,18 +69,68 @@ def test_pipeline(tmp_path, nfiles=2):
         save_ome_tiff(filename, data.data, dimension_order, pixel_size, positions=[position])
         filenames.append(filename)
 
-    sims, translations, rotations = init_tiles(filenames)
+    return init_tiles(filenames)
 
+
+def test1(sims, tmp_path):
+    # works
     output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
     stack_sims = [fusion.fuse(
         [sim],
         transform_key='stage_metadata',
         output_stack_properties=output_stack_properties
     ) for sim in sims]
-    #fused_image = xr.combine_nested([sim.rename() for sim in sims], concat_dim='z', combine_attrs='override')
     fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
-
     save_image(tmp_path / 'fused', fused_image, transform_key='stage_metadata', params={'format': 'tif'})
+
+def test2(sims, tmp_path):
+    # error in fuse: fix_dims=[] (instead of ['z']), not fusing plane-wise; division by 0 in edt_support_spacing = {...}
+    z_scale = 0.5
+    output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
+    if z_scale is not None:
+        output_stack_properties['spacing']['z'] = z_scale
+    stack_sims = [fusion.fuse(
+        [sim],
+        transform_key='stage_metadata',
+        output_stack_properties=output_stack_properties
+    ) for sim in sims]
+    fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
+    save_image(tmp_path / 'fused', fused_image, transform_key='stage_metadata', params={'format': 'tif'})
+
+def test3(sims, tmp_path):
+    # error in fuse: same as in test2
+    stack_sims = [fusion.fuse(
+        [sim],
+        transform_key='stage_metadata',
+    ) for sim in sims]
+    fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
+    save_image(tmp_path / 'fused', fused_image, transform_key='stage_metadata', params={'format': 'tif'})
+
+
+def test_pipeline(tmp_path, nfiles=2):
+    sims, translations, rotations = test_init_tiles(tmp_path, nfiles)
+
+    try:
+        test1(sims, tmp_path)
+        print('test 1 ok')
+    except Exception:
+        print(traceback.format_exc())
+        print('test 1 error')
+
+    try:
+        test2(sims, tmp_path)
+        print('test 2 ok')
+    except Exception:
+        print(traceback.format_exc())
+        print('test 2 error')
+
+    try:
+        test3(sims, tmp_path)
+        print('test 3 ok')
+    except Exception:
+        print(traceback.format_exc())
+        print('test 3 error')
+
     print(tmp_path)
     pass
 
