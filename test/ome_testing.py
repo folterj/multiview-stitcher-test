@@ -49,7 +49,7 @@ def test_zstack(filename):
     save_image(filename, sim)
 
 
-def test_init_tiles(tmp_path, nfiles=2):
+def test_init_tiles(tmp_path, ntiles=2):
     dimension_order = 'yx'
     size = (1024, 1024)
     chunks = (256, 256)
@@ -58,7 +58,7 @@ def test_init_tiles(tmp_path, nfiles=2):
 
     filenames = []
     z_position = 0
-    for filei in range(nfiles):
+    for filei in range(ntiles):
         filename = tmp_path / datetime.now().strftime('%Y%m%d_%H%M%S_%f.ome.tiff')
         position = list(np.random.rand(2)) + [z_position]
         z_position += z_scale
@@ -70,6 +70,41 @@ def test_init_tiles(tmp_path, nfiles=2):
         filenames.append(filename)
 
     return init_tiles(filenames)
+
+
+def test_init_tiles_simple(ntiles=2):
+    dimension_order0 = 'yx'
+    dimension_order = 'zyx'
+    size = (1024, 1024)
+    chunks = (256, 256)
+    pixel_size = [0.1, 0.1]
+    z_scale = 0.5
+
+    z_position = 0
+    sims = []
+    for filei in range(ntiles):
+        position = list(np.random.rand(2)) + [z_position]
+        z_position += z_scale
+        data = xr.DataArray(
+            da.random.randint(0, 65535, size=size, chunks=chunks, dtype=da.uint16),
+            dims=list(dimension_order0)
+        )
+        data = redimension_data(data, dimension_order0, dimension_order)    # always add z axis to store z position
+        scale_dict = convert_xyz_to_dict(pixel_size)
+        if len(scale_dict) > 0 and 'z' not in scale_dict:
+            scale_dict['z'] = 1
+        translation_dict = convert_xyz_to_dict(position)
+        if len(translation_dict) > 0 and 'z' not in translation_dict:
+            translation_dict['z'] = 0
+        sim = si_utils.get_sim_from_array(
+            data,
+            dims=list(dimension_order),
+            scale=scale_dict,
+            translation=translation_dict,
+            transform_key="stage_metadata"
+        )
+        sims.append(sim)
+    return sims
 
 
 def test1(sims, tmp_path):
@@ -107,8 +142,9 @@ def test3(sims, tmp_path):
     save_image(tmp_path / 'fused', fused_image, transform_key='stage_metadata', params={'format': 'tif'})
 
 
-def test_pipeline(tmp_path, nfiles=2):
-    sims, translations, rotations = test_init_tiles(tmp_path, nfiles)
+def test_pipeline(tmp_path, ntiles=2):
+    #sims, translations, rotations = test_init_tiles(tmp_path, ntiles)
+    sims = test_init_tiles_simple(ntiles)
 
     try:
         test1(sims, tmp_path)
