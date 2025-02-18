@@ -128,7 +128,6 @@ def init_tiles(files, flatfield_quantile=None,
             c_coords=channel_labels
         )
         sims.append(sim)
-        source.close()
 
     return sims, translations, rotations
 
