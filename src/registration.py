@@ -431,8 +431,8 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                 post_registration_quality_threshold=0.1,
 
                 plot_summary=True,
-                return_metrics=True
-            )
+                #return_metrics=True
+            ), {'mean_residual':[0]}
 
             final_residual = list(metrics['mean_residual'])[-1]
 
