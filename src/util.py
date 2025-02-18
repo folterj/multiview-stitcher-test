@@ -130,7 +130,9 @@ def get_filetitle(filename: str) -> str:
 
 
 def dir_regex(pattern):
-    files = glob.glob(pattern, recursive=True)
+    files = []
+    for pattern_item in ensure_list(pattern):
+        files.extend(glob.glob(pattern_item, recursive=True))
     files_sorted = sorted(files, key=lambda file: find_all_numbers(get_filetitle(file)))
     return files_sorted
 

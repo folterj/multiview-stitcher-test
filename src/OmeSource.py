@@ -34,9 +34,9 @@ class OmeSource:
     """#bits for all pages"""
     channels: list
     """channel information for all image channels"""
-    position: list
+    position: list | None
     """source position information"""
-    rotation: float
+    rotation: float | None
     """source rotation information"""
 
     default_properties_order = 'xyzct'
@@ -54,6 +54,8 @@ class OmeSource:
         self.pixel_types = []
         self.pixel_nbits = []
         self.channels = []
+        self.position = None
+        self.rotation = None
 
     def _init_metadata(self,
                        source_reference: str,

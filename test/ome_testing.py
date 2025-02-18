@@ -69,7 +69,7 @@ def test_init_tiles(tmp_path, ntiles=2):
         save_ome_tiff(filename, data.data, dimension_order, pixel_size, positions=[position])
         filenames.append(filename)
 
-    return init_tiles(filenames)
+    return init_tiles(filenames, 'stage_metadata')
 
 
 def test_init_tiles_simple(ntiles=2):
@@ -101,7 +101,7 @@ def test_init_tiles_simple(ntiles=2):
             dims=list(dimension_order),
             scale=scale_dict,
             translation=translation_dict,
-            transform_key="stage_metadata"
+            transform_key='stage_metadata'
         )
         sims.append(sim)
     return sims

@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 import traceback
 import xarray as xr
 
+from src.image.util import *
+
 
 def convert_xyz_to_dict(xyz, axes='xyz'):
     dct = {dim: value for dim, value in zip(axes, xyz)}
@@ -68,25 +70,13 @@ def test_init_tiles_simple(ntiles=2):
             dims=list(dimension_order),
             scale=scale_dict,
             translation=translation_dict,
-            transform_key="stage_metadata"
+            transform_key='stage_metadata'
         )
         sims.append(sim)
     return sims
 
 
-def test1(sims, tmp_path):
-    # works
-    output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
-    stack_sims = [fusion.fuse(
-        [sim],
-        transform_key='stage_metadata',
-        output_stack_properties=output_stack_properties
-    ) for sim in sims]
-    fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
-    fused_image.compute()
-
-def test2(sims, tmp_path):
-    # error in fuse: fix_dims=[] (instead of ['z']), not fusing plane-wise; division by 0 in edt_support_spacing = {...}
+def test(sims, tmp_path):
     z_scale = 0.5
     output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
     if z_scale is not None:
@@ -94,46 +84,103 @@ def test2(sims, tmp_path):
     stack_sims = [fusion.fuse(
         [sim],
         transform_key='stage_metadata',
-        output_stack_properties=output_stack_properties
+        output_stack_properties=output_stack_properties,
+        fusion_func=fusion.simple_average_fusion,
+        #output_chunksize={'z': 1, 'y': 1000, 'x': 1000},
     ) for sim in sims]
     fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
+    spacing = si_utils.get_spacing_from_sim(fused_image)
+    print(spacing)
     fused_image.compute()
 
-def test3(sims, tmp_path):
-    # error in fuse: same as in test2
+
+def test2(sims, tmp_path):
+    # error in fuse: fix_dims=[] (instead of ['z']), not fusing plane-wise; division by 0 in edt_support_spacing = {...}
+    # z_scale = 0.5
+    output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
+    # if z_scale is not None:
+    #     output_stack_properties['spacing']['z'] = z_scale
     stack_sims = [fusion.fuse(
         [sim],
         transform_key='stage_metadata',
+        output_stack_properties=output_stack_properties,
+        # fusion_func=fusion.simple_average_fusion,
     ) for sim in sims]
+    # stack_sims = sims
     fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
-    fused_image.compute()
+    # fused_image.data.compute(scheduler='single-threaded')
+    import matplotlib.pyplot as plt
+    import tifffile
+    #tifffile.imshow(fused_image.data)
+    #plt.show()
+    show_image(fused_image[0][0][0])
+    show_image(fused_image[0][0][1])
+
+
+def test3(sims, tmp_path):
+    # error in fuse: fix_dims=[] (instead of ['z']), not fusing plane-wise; division by 0 in edt_support_spacing = {...}
+    # z_scale = 0.5
+    output_stack_properties = si_utils.get_stack_properties_from_sim(sims[0])
+    # if z_scale is not None:
+    #     output_stack_properties['spacing']['z'] = z_scale
+
+    stack_sims = [fusion.fuse(
+        [sim],
+        transform_key='stage_metadata',
+        output_stack_properties=output_stack_properties,
+        # fusion_func=fusion.simple_average_fusion,
+    ) for sim in sims]
+
+    fused_image = xr.combine_nested(stack_sims, concat_dim='z')
+    #fused_image = xr.concat(stack_sims, dim='z')
+
+    show_image(sims[0][0][0][0])
+    show_image(sims[1][0][0][0])
+
+    show_image(stack_sims[0][0][0][0])
+    show_image(stack_sims[1][0][0][0])
+
+
+def test4(sims, tmp_path):
+    z_scale = 0.5
+    transform_key = 'stage_metadata'
+
+    # set output spacing
+    output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
+
+    # calculate output stack properties from input views
+    output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+        [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+        [np.array(si_utils.get_affine_from_sim(sim, transform_key).squeeze()) for sim in sims],
+        output_spacing,
+        mode='union',
+    )
+
+    # convert to dict form (this should not be needed anymore in the next release)
+    output_stack_properties = {
+        k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+        for k, v in output_stack_properties.items()
+    }
+
+    # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
+    # because it does not take into account the correct input z spacing because of stacks of one z plane
+    output_stack_properties['shape']['z'] = len(sims)
+
+    # fuse all sims together using simple average fusion
+    fused_image = fusion.fuse(
+        sims,
+        transform_key=transform_key,
+        output_stack_properties=output_stack_properties,
+        #output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
+        fusion_func=fusion.simple_average_fusion,
+    )
+    return fused_image
 
 
 def test_pipeline(tmp_path, ntiles=2):
     #sims, translations, rotations = test_init_tiles(tmp_path, ntiles)
     sims = test_init_tiles_simple(ntiles)
-
-    try:
-        test1(sims, tmp_path)
-        print('test 1 ok')
-    except Exception:
-        print(traceback.format_exc())
-        print('test 1 error')
-
-    try:
-        test2(sims, tmp_path)
-        print('test 2 ok')
-    except Exception:
-        print(traceback.format_exc())
-        print('test 2 error')
-
-    try:
-        test3(sims, tmp_path)
-        print('test 3 ok')
-    except Exception:
-        print(traceback.format_exc())
-        print('test 3 error')
-
+    test4(sims, tmp_path)
     print(tmp_path)
     pass
 

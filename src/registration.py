@@ -60,7 +60,7 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, flatfield_quantile=None,
+def init_tiles(files, transform_key, flatfield_quantile=None,
                invert_x_coordinates=False, normalise_orientation=False, reset_coordinates=False,
                verbose=False):
     sims = []
@@ -124,11 +124,10 @@ def init_tiles(files, flatfield_quantile=None,
             scale=scale_dict,
             translation=translation_dict,
             affine=transform,
-            transform_key="stage_metadata",
+            transform_key=transform_key,
             c_coords=channel_labels
         )
         sims.append(sim)
-        source.close()
 
     return sims, translations, rotations
 
@@ -156,7 +155,7 @@ def normalise_rotated_positions(positions0, rotations0, size):
     return positions, rotations
 
 
-def normalise(sims, use_global=True):
+def normalise(sims, transform_key, use_global=True):
     new_sims = []
     # global mean and stddev
     if use_global:
@@ -181,8 +180,8 @@ def normalise(sims, use_global=True):
             dims=sim.dims,
             scale=si_utils.get_spacing_from_sim(sim),
             translation=si_utils.get_origin_from_sim(sim),
-            transform_key='stage_metadata',
-            affine=si_utils.get_affine_from_sim(sim, 'stage_metadata'),
+            transform_key=transform_key,
+            affine=si_utils.get_affine_from_sim(sim, transform_key),
             c_coords=sim.c
         )
         new_sims.append(new_sim)
@@ -303,7 +302,8 @@ def pairwise_registration_cpd(
     }
 
 
-def register(sims0, operation, method, reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
+def register(sims0, operation, method, source_transform_key, reg_transform_key,
+             reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
              use_orthogonal_pairs=False, use_rotation=False, extra_metadata={}, verbose=False):
     if isinstance(reg_channel, int):
         reg_channel_index = reg_channel
@@ -324,7 +324,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             logging.info('Normalising tiles (global)...')
         else:
             logging.info('Normalising tiles...')
-        sims = normalise(sims0, use_global=use_global)
+        sims = normalise(sims0, source_transform_key, use_global=use_global)
     else:
         sims = sims0
 
@@ -347,13 +347,13 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             msi_utils.set_affine_transform(
                 msim0,
                 param_utils.identity_transform(ndim=2, t_coords=[0]),
-                transform_key='registered',
-                base_transform_key='stage_metadata')
+                transform_key=reg_transform_key,
+                base_transform_key=source_transform_key)
             msi_utils.set_affine_transform(
                 msim,
                 param_utils.identity_transform(ndim=2, t_coords=[0]),
-                transform_key='registered',
-                base_transform_key='stage_metadata')
+                transform_key=reg_transform_key,
+                base_transform_key=source_transform_key)
 
         indices = np.where(foregrounds)[0]
         register_msims = foreground_msims
@@ -393,18 +393,10 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             if use_rotation:
                 pairwise_reg_func_kwargs = {
                     'transform_types': ['Rigid'],
-                    # options include 'Translation', 'Rigid', 'Affine', 'Similarity' and can be concatenated
-                    #"aff_metric": "meansquares",  # options include 'mattes', 'meansquares',
-                    # more parameters to tune:
                     "aff_random_sampling_rate": 0.5,
                     "aff_iterations": (2000, 2000, 1000, 1000),
                     "aff_smoothing_sigmas": (4, 2, 1, 0),
                     "aff_shrink_factors": (16, 8, 2, 1),
-
-                    # "aff_random_sampling_rate": 0.2,
-                    # "aff_iterations": (2000, 2000),
-                    # "aff_smoothing_sigmas": (1, 0),
-                    # "aff_shrink_factors": (2, 1),
                 }
                 # these are the parameters for the groupwise registration (global optimization)
                 groupwise_resolution_kwargs = {
@@ -418,8 +410,8 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                 register_msims,
                 reg_channel=reg_channel,
                 reg_channel_index=reg_channel_index,
-                transform_key="stage_metadata",
-                new_transform_key="registered",
+                transform_key=source_transform_key,
+                new_transform_key=reg_transform_key,
 
                 pairs=pairs,
                 pre_registration_pruning_method=None,
@@ -455,8 +447,8 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
             for msim, msim0 in zip(msims, msims0):
                 msi_utils.set_affine_transform(
                     msim0,
-                    msi_utils.get_transform_from_msim(msim, transform_key='registered'),
-                    transform_key='registered')
+                    msi_utils.get_transform_from_msim(msim, transform_key=reg_transform_key),
+                    transform_key=reg_transform_key)
 
         except NotEnoughOverlapError:
             final_residual = 0
@@ -465,8 +457,8 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
                 msi_utils.set_affine_transform(
                     msim0,
                     param_utils.identity_transform(ndim=2, t_coords=[0]),
-                    transform_key='registered',
-                    base_transform_key='stage_metadata')
+                    transform_key=reg_transform_key,
+                    base_transform_key=source_transform_key)
             mappings_dict = {index: np.eye(3) for index, _ in enumerate(msims0)}
 
     if verbose:
@@ -477,20 +469,34 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     # convert to multichannel images
     sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
     if is_stack:
-        output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
-        stack_sims = [fusion.fuse(
-            [sim],
-            transform_key='registered',
-            output_stack_properties=output_stack_properties
-        ) for sim in sims0]
-        #stack_sims = [sim.assign_coords({'z': simi * z_scale}) for simi, sim in enumerate(stack_sims)]
-        stack_sims = [sim.expand_dims(axis=2, z=[simi * z_scale]) for simi, sim in enumerate(stack_sims)]
-        fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
+        output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
+        # calculate output stack properties from input views
+        output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+            [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+            [np.array(si_utils.get_affine_from_sim(sim, reg_transform_key).squeeze()) for sim in sims],
+            output_spacing,
+            mode='union',
+        )
+        # convert to dict form (this should not be needed anymore in the next release)
+        output_stack_properties = {
+            k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+            for k, v in output_stack_properties.items()
+        }
+        # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
+        # because it does not take into account the correct input z spacing because of stacks of one z plane
+        output_stack_properties['shape']['z'] = len(sims)
+        # fuse all sims together using simple average fusion
+        fused_image = fusion.fuse(
+            sims,
+            transform_key=reg_transform_key,
+            output_stack_properties=output_stack_properties,
+            fusion_func=fusion.simple_average_fusion,
+        )
     elif is_channel_overlay:
         output_stack_properties = si_utils.get_stack_properties_from_sim(sims0[0])
         channel_sims = [fusion.fuse(
             [sim],
-            transform_key='registered',
+            transform_key=reg_transform_key,
             output_stack_properties=output_stack_properties
         ) for sim in sims0]
         channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
@@ -498,7 +504,7 @@ def register(sims0, operation, method, reg_channel=None, reg_channel_index=None,
     else:
         fused_image = fusion.fuse(
             sims0,
-            transform_key='registered'
+            transform_key=reg_transform_key
         )
     return {'mappings': mappings_dict,
             'final_residual': final_residual,
@@ -565,6 +571,9 @@ def run_operation_files(filenames, params, params_general):
     pyramid_downsample = params_general.get('pyramid_downsample', 2)
     verbose = params_general.get('verbose', False)
 
+    source_transform_key = 'stage_metadata'
+    reg_transform_key = 'registered'
+
     file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
     if len(filenames) == 0:
@@ -587,7 +596,7 @@ def run_operation_files(filenames, params, params_general):
     registered_fused_filename = output + 'registered'
 
     logging.info('Initialising tiles...')
-    sims, positions, rotations = init_tiles(filenames, flatfield_quantile=flatfield_quantile,
+    sims, positions, rotations = init_tiles(filenames, source_transform_key, flatfield_quantile=flatfield_quantile,
                                             invert_x_coordinates=invert_x_coordinates,
                                             normalise_orientation=normalise_orientation,
                                             reset_coordinates=reset_coordinates,
@@ -604,21 +613,22 @@ def run_operation_files(filenames, params, params_general):
         logging.info('Fusing original...')
         original_fused = fusion.fuse(
             sims,
-            transform_key='stage_metadata'
+            transform_key=source_transform_key
         )
 
         # plot the tile configuration
         logging.info('Plotting tiles...')
         msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-        vis_utils.plot_positions(msims, transform_key='stage_metadata', use_positional_colors=False,
+        vis_utils.plot_positions(msims, transform_key=source_transform_key, use_positional_colors=False,
                                  view_labels=file_indices, view_labels_size=3,
                                  show_plot=False, output_filename=original_positions_filename)
 
         logging.info('Saving fused image...')
-        save_image(original_fused_filename, original_fused, transform_key='stage_metadata',
+        save_image(original_fused_filename, original_fused, transform_key=source_transform_key,
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
-    results = register(sims, operation, method, reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
+    results = register(sims, operation, method, source_transform_key, reg_transform_key,
+                       reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                        use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, extra_metadata=extra_metadata,
                        verbose=verbose)
     msims = results['msims']
@@ -640,7 +650,7 @@ def run_operation_files(filenames, params, params_general):
             if not normalise_orientation:
                 # rotation already in msim affine transform
                 rotation = None
-            position, rotation = get_data_mapping(msim, transform_key='registered',
+            position, rotation = get_data_mapping(msim, transform_key=reg_transform_key,
                                                   transform=mapping, translation0=position, rotation=rotation)
             row = [get_filetitle(filenames[index])] + list(position) + [rotation]
             csvwriter.writerow(row)
@@ -656,13 +666,13 @@ def run_operation_files(filenames, params, params_general):
 
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
-    vis_utils.plot_positions(msims, transform_key='registered', use_positional_colors=False,
+    vis_utils.plot_positions(msims, transform_key=reg_transform_key, use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=False, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
     save_image(registered_fused_filename, results['fused_image'],
-               transform_key='registered', channels=channels, translation0=positions[0],
+               transform_key=reg_transform_key, channels=channels, translation0=positions[0],
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
 
