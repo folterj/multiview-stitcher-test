@@ -17,7 +17,7 @@ operations:
     scale: 0.1
     frames: 100
     fps: 10
-    input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tif
+    input: /nemo/project/proj-czi-vp/raw/lm/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tiff
     #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tiff
     #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/*.ome.tiff
     flatfield_quantile: 0.95
