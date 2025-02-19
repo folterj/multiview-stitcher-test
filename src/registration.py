@@ -21,6 +21,7 @@ import xarray as xr
 
 from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
+from src.Video import Video
 from src.image.ome_helper import save_image
 from src.image.util import *
 from src.util import *
@@ -69,7 +70,8 @@ def init_tiles(files, transform_key, flatfield_quantile=None,
     images = []
     logging.info('Init tiles...')
     for source in tqdm(sources, disable=not verbose):
-        output_order = 'zyx'
+        output_order = 'yx'
+        #output_order = 'zyx'
         if source.get_nchannels() > 1:
             output_order += 'c'
         image = redimension_data(source.get_source_dask()[0],
@@ -551,6 +553,7 @@ def run_operation(params, params_general):
 
 def run_operation_files(filenames, params, params_general):
     operation = params['operation']
+    is_transition = ('transition' in operation)
     output_params = params_general.get('output', {})
     method = params.get('method', '').lower()
     invert_x_coordinates = params.get('invert_x_coordinates', False)
@@ -573,6 +576,7 @@ def run_operation_files(filenames, params, params_general):
 
     source_transform_key = 'stage_metadata'
     reg_transform_key = 'registered'
+    transition_transform_key = 'transition'
 
     file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
 
@@ -631,6 +635,7 @@ def run_operation_files(filenames, params, params_general):
                        reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
                        use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, extra_metadata=extra_metadata,
                        verbose=verbose)
+    fused_image = results['fused_image']
     msims = results['msims']
     mappings = results['mappings']
     mappings2 = {get_filetitle(filenames[index]): mapping.tolist() for index, mapping in mappings.items()}
@@ -671,9 +676,33 @@ def run_operation_files(filenames, params, params_general):
                              show_plot=False, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
-    save_image(registered_fused_filename, results['fused_image'],
+    save_image(registered_fused_filename, fused_image,
                transform_key=reg_transform_key, channels=channels, translation0=positions[0],
                npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
+
+    if is_transition:
+        logging.info('Creating transition...')
+        nframes = params.get('frames', 1)
+        spacing = params.get('spacing', [1.1, 1])
+        scale = params.get('scale', 1)
+        video_filename = output + 'transition.mp4'
+        video = Video(video_filename, fps=params.get('fps', 1), scale=scale, normalise=True)
+        tsims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+        positions0 = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in tsims])
+        center = np.mean(positions0, 0)
+
+        for framei in range(nframes):
+            spacing1 = spacing[0] + (spacing[1] - spacing[0]) * framei / (nframes - 1) - 1
+            for tsim, position0 in zip(tsims, positions0):
+                transform = param_utils.identity_transform(ndim=2, t_coords=[0])
+                transform[0][:2, 2] += (position0 - center) * spacing1
+                si_utils.set_sim_affine(tsim, transform, transform_key=transition_transform_key)
+            frame = fusion.fuse(tsims, transform_key=transition_transform_key)
+            video.write(frame)
+        # repeat final frame
+        for framei in range(nframes):
+            video.write(frame)
+        video.close()
 
 
 def run(params):

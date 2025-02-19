@@ -317,6 +317,8 @@ def get_data_mapping(data, transform_key=None, transform=None, translation0=None
     origin = si_utils.get_origin_from_sim(sim)
     translation = [origin[sdim] for sdim in sdims]
 
+    if len(translation) == 0:
+        translation = [0, 0]
     if len(translation) == 2:
         if translation0 is not None and len (translation0) == 3:
             z = translation0[2]

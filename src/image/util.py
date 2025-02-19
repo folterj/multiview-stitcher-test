@@ -215,10 +215,10 @@ def image_reshape(image: np.ndarray, target_size: tuple) -> np.ndarray:
     if sw < tw or sh < th:
         dw = max(tw - sw, 0)
         dh = max(th - sh, 0)
-        padding = [(0, dh), (0, dw)]
+        padding = [(dh // 2, dh - dh //  2), (dw // 2, dw - dw // 2)]
         if len(image.shape) == 3:
             padding += [(0, 0)]
-        image = np.pad(image, padding, 'edge')
+        image = np.pad(image, padding, mode='constant', constant_values=(0, 0))
     if tw < sw or th < sh:
         image = image[0:th, 0:tw]
     return image
