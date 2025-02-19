@@ -4,6 +4,7 @@
 import csv
 from contextlib import nullcontext
 import cv2 as cv
+import tifffile
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -80,11 +81,17 @@ def init_tiles(files, transform_key, flatfield_quantile=None,
 
     if flatfield_quantile is not None:
         logging.info('Applying flatfield correction...')
-        norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
         dtype = images[0].dtype
-        max_image = norm_images[0]
-        maxval = 2 ** (8 * dtype.itemsize) - 1
-        max_image = max_image / np.float32(maxval)
+        norm_image_filename = f'resources/norm{flatfield_quantile}.tiff'
+        if os.path.exists(norm_image_filename):
+            logging.warning('Loading cached normalisation image')
+            max_image = tifffile.imread(norm_image_filename)
+        else:
+            norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
+            max_image = norm_images[0]
+            maxval = 2 ** (8 * dtype.itemsize) - 1
+            max_image = max_image / np.float32(maxval)
+            tifffile.imwrite(norm_image_filename, max_image)
         images = [float2int_image(flatfield_correction(int2float_image(image), bright=max_image), dtype) for image in images]
 
     translations = []
