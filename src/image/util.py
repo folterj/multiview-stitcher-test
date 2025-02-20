@@ -27,6 +27,24 @@ def show_image_gray(image: np.ndarray):
     plt.show()
 
 
+def grayscale_image(image):
+    nchannels = image.shape[2] if len(image.shape) > 2 else 1
+    if nchannels == 4:
+        return cv.cvtColor(image, cv.COLOR_RGBA2GRAY)
+    elif nchannels > 1:
+        return cv.cvtColor(image, cv.COLOR_RGB2GRAY)
+    else:
+        return image
+
+
+def color_image(image):
+    nchannels = image.shape[2] if len(image.shape) > 2 else 1
+    if nchannels == 1:
+        return cv.cvtColor(image, cv.COLOR_GRAY2RGB)
+    else:
+        return image
+
+
 def int2float_image(image):
     source_dtype = image.dtype
     if not source_dtype.kind == 'f':
@@ -117,39 +135,6 @@ def get_numpy_slicing(dimension_order, **slicing):
             slice1 = slice(None)
         slices.append(slice1)
     return tuple(slices)
-
-
-def get_image_quantile(image: np.ndarray, quantile: float, axis=None) -> float:
-    value = np.quantile(image, quantile, axis=axis).astype(image.dtype)
-    return value
-
-
-def normalise_values(image: np.ndarray, min_value: float, max_value: float) -> np.ndarray:
-    return np.clip((image.astype(np.float32) - min_value) / (max_value - min_value), 0, 1)
-
-
-def norm_image_variance(image0):
-    if len(image0.shape) == 3 and image0.shape[2] == 4:
-        image, alpha = image0[..., :3], image0[..., 3]
-    else:
-        image, alpha = image0, None
-    normimage = np.clip((image - np.mean(image)) / np.std(image), 0, 1).astype(np.float32)
-    if alpha is not None:
-        normimage = np.dstack([normimage, alpha])
-    return normimage
-
-
-def norm_image_quantiles(image0, quantile=0.99):
-    if len(image0.shape) == 3 and image0.shape[2] == 4:
-        image, alpha = image0[..., :3], image0[..., 3]
-    else:
-        image, alpha = image0, None
-    min_value = np.quantile(image, 1 - quantile)
-    max_value = np.quantile(image, quantile)
-    normimage = np.clip((image - min_value) / (max_value - min_value), 0, 1).astype(np.float32)
-    if alpha is not None:
-        normimage = np.dstack([normimage, alpha])
-    return normimage
 
 
 def get_image_size_info(sizes_xyzct: list, pixel_nbytes: int, pixel_type: np.dtype, channels: list) -> str:
@@ -490,6 +475,47 @@ def calc_images_median(images):
 def calc_images_quantiles(images, quantiles):
     quantile_images = [image.astype(np.float32) for image in np.quantile(images, quantiles, 0)]
     return quantile_images
+
+
+def get_image_quantile(image: np.ndarray, quantile: float, axis=None) -> float:
+    value = np.quantile(image, quantile, axis=axis).astype(image.dtype)
+    return value
+
+
+def get_image_window(image, low=0.01, high=0.99):
+    window = (
+        get_image_quantile(image, low),
+        get_image_quantile(image, high)
+    )
+    return window
+
+
+def normalise_values(image: np.ndarray, min_value: float, max_value: float) -> np.ndarray:
+    return np.clip((image.astype(np.float32) - min_value) / (max_value - min_value), 0, 1)
+
+
+def norm_image_variance(image0):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    normimage = np.clip((image - np.mean(image)) / np.std(image), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
+
+
+def norm_image_quantiles(image0, quantile=0.99):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    min_value = np.quantile(image, 1 - quantile)
+    max_value = np.quantile(image, quantile)
+    normimage = np.clip((image - min_value) / (max_value - min_value), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
 
 
 def create_normalisation_images(images, quantiles, nchannels=1):

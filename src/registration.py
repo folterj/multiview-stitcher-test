@@ -4,7 +4,6 @@
 import csv
 from contextlib import nullcontext
 import cv2 as cv
-import tifffile
 from dask.diagnostics import ProgressBar
 import json
 import logging
@@ -24,6 +23,7 @@ from src.OmeZarrSource import OmeZarrSource
 from src.TiffSource import TiffSource
 from src.Video import Video
 from src.image.ome_helper import save_image
+from src.image.ome_tiff_helper import load_tiff, save_tiff
 from src.image.util import *
 from src.util import *
 
@@ -85,13 +85,13 @@ def init_tiles(files, transform_key, flatfield_quantile=None,
         norm_image_filename = f'resources/norm{flatfield_quantile}.tiff'
         if os.path.exists(norm_image_filename):
             logging.warning('Loading cached normalisation image')
-            max_image = tifffile.imread(norm_image_filename)
+            max_image = load_tiff(norm_image_filename)
         else:
             norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
             max_image = norm_images[0]
             maxval = 2 ** (8 * dtype.itemsize) - 1
             max_image = max_image / np.float32(maxval)
-            tifffile.imwrite(norm_image_filename, max_image)
+            save_tiff(norm_image_filename, max_image)
         images = [float2int_image(flatfield_correction(int2float_image(image), bright=max_image), dtype) for image in images]
 
     translations = []
@@ -168,22 +168,26 @@ def normalise(sims, transform_key, use_global=True):
     new_sims = []
     # global mean and stddev
     if use_global:
-        means = []
-        stddevs = []
+        mins = []
+        ranges = []
         for sim in sims:
-            means.append(np.mean(sim.data))
-            stddevs.append(np.std(sim.data))
-        mean = np.mean(means)
-        stddev = np.mean(stddevs)
+            min = np.mean(sim)
+            range = np.std(sim)
+            #min, max = get_image_window(sim, low=0.01, high=0.99)
+            #range = max - min
+            mins.append(min)
+            ranges.append(range)
+        min = np.mean(mins)
+        range = np.mean(ranges)
     else:
-        mean = 0
-        stddev = 1
+        min = 0
+        range = 1
     # normalise all images
     for sim in sims:
         if not use_global:
-            mean = np.mean(sim.data)
-            stddev = np.std(sim.data)
-        image = float2int_image(np.clip((sim.data - mean) / stddev, 0, 1))
+            min = np.mean(sim)
+            range = np.std(sim)
+        image = float2int_image(np.clip((sim - min) / range, 0, 1))
         new_sim = si_utils.get_sim_from_array(
             image,
             dims=sim.dims,
@@ -311,17 +315,28 @@ def pairwise_registration_cpd(
     }
 
 
-def register(sims0, operation, method, source_transform_key, reg_transform_key,
-             reg_channel=None, reg_channel_index=None, normalisation=False, filter_foreground=False,
-             use_orthogonal_pairs=False, use_rotation=False, extra_metadata={}, verbose=False):
-    if isinstance(reg_channel, int):
-        reg_channel_index = reg_channel
-        reg_channel = None
-
+def register(sims0, source_transform_key, reg_transform_key, params, params_general):
     global pixel_size_xyz
     sim0 = sims0[0]
     pixel_size_xyz = [si_utils.get_spacing_from_sim(sim0).get(dim, 1) for dim in 'xyz']
 
+    operation = params['operation']
+    method = params.get('method', '').lower()
+    reg_channel = params.get('channel', 0)
+    if isinstance(reg_channel, int):
+        reg_channel_index = reg_channel
+        reg_channel = None
+    else:
+        reg_channel_index = None
+
+    normalisation = params.get('normalisation', False)
+    filter_foreground = params.get('filter_foreground', False)
+    use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
+    use_rotation = params.get('use_rotation', False)
+    show_filtered = params_general.get('show_filtered', False)
+    verbose = params_general.get('verbose', False)
+
+    extra_metadata = params.get('extra_metadata', {})
     channels = extra_metadata.get('channels', [])
     z_scale = extra_metadata.get('scale', {}).get('z', 1)
     is_stack = ('stack' in operation)
@@ -349,6 +364,12 @@ def register(sims0, operation, method, source_transform_key, reg_transform_key,
         threshold = min(threshold1, threshold2, threshold3)
         foregrounds = (tile_vars >= threshold)
         foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
+
+        if show_filtered:
+            filtered_filename = params['output'] + 'filtered.png'
+            vis_utils.plot_positions(foreground_msims, transform_key=source_transform_key, use_positional_colors=False,
+                                     view_labels_size=3, show_plot=verbose, output_filename=filtered_filename)
+
         logging.info(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
 
         # duplicate transform keys
@@ -562,16 +583,10 @@ def run_operation_files(filenames, params, params_general):
     operation = params['operation']
     is_transition = ('transition' in operation)
     output_params = params_general.get('output', {})
-    method = params.get('method', '').lower()
     invert_x_coordinates = params.get('invert_x_coordinates', False)
     flatfield_quantile = params.get('flatfield_quantile')
-    normalisation = params.get('normalisation', False)
-    filter_foreground = params.get('filter_foreground', False)
-    use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
     normalise_orientation = params.get('normalise_orientation', False)
     reset_coordinates = params.get('reset_coordinates', False)
-    use_rotation = params.get('use_rotation', False)
-    reg_channel = params.get('channel', 0)
     extra_metadata = params.get('extra_metadata', {})
     channels = extra_metadata.get('channels', [])
     clear = output_params.get('clear', False)
@@ -601,11 +616,6 @@ def run_operation_files(filenames, params, params_general):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    original_positions_filename = output + 'positions_original.png'
-    original_fused_filename = output + 'original'
-    registered_positions_filename = output + 'positions_registered.png'
-    registered_fused_filename = output + 'registered'
-
     logging.info('Initialising tiles...')
     sims, positions, rotations = init_tiles(filenames, source_transform_key, flatfield_quantile=flatfield_quantile,
                                             invert_x_coordinates=invert_x_coordinates,
@@ -613,6 +623,7 @@ def run_operation_files(filenames, params, params_general):
                                             reset_coordinates=reset_coordinates,
                                             verbose=verbose)
 
+    registered_fused_filename = output + 'registered'
     if len(filenames) == 1:
         logging.warning('Skipping registration (single tile)')
         save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
@@ -621,27 +632,20 @@ def run_operation_files(filenames, params, params_general):
 
     if show_original:
         # before registration:
-        logging.info('Fusing original...')
-        original_fused = fusion.fuse(
-            sims,
-            transform_key=source_transform_key
-        )
-
-        # plot the tile configuration
         logging.info('Plotting tiles...')
         msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
+        original_positions_filename = output + 'positions_original.png'
         vis_utils.plot_positions(msims, transform_key=source_transform_key, use_positional_colors=False,
                                  view_labels=file_indices, view_labels_size=3,
-                                 show_plot=False, output_filename=original_positions_filename)
+                                 show_plot=verbose, output_filename=original_positions_filename)
 
-        logging.info('Saving fused image...')
+        logging.info('Fusing original...')
+        original_fused = fusion.fuse(sims, transform_key=source_transform_key)
+        original_fused_filename = output + 'original'
         save_image(original_fused_filename, original_fused, transform_key=source_transform_key,
                    npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
 
-    results = register(sims, operation, method, source_transform_key, reg_transform_key,
-                       reg_channel, normalisation=normalisation, filter_foreground=filter_foreground,
-                       use_orthogonal_pairs=use_orthogonal_pairs, use_rotation=use_rotation, extra_metadata=extra_metadata,
-                       verbose=verbose)
+    results = register(sims, source_transform_key, reg_transform_key, params, params_general)
     fused_image = results['fused_image']
     msims = results['msims']
     mappings = results['mappings']
@@ -678,9 +682,10 @@ def run_operation_files(filenames, params, params_general):
 
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
+    registered_positions_filename = output + 'positions_registered.png'
     vis_utils.plot_positions(msims, transform_key=reg_transform_key, use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
-                             show_plot=False, output_filename=registered_positions_filename)
+                             show_plot=verbose, output_filename=registered_positions_filename)
 
     logging.info('Saving fused image...')
     save_image(registered_fused_filename, fused_image,
@@ -689,26 +694,37 @@ def run_operation_files(filenames, params, params_general):
 
     if is_transition:
         logging.info('Creating transition...')
+        pixel_size = pixel_size_xyz[:2]
         nframes = params.get('frames', 1)
         spacing = params.get('spacing', [1.1, 1])
         scale = params.get('scale', 1)
-        video_filename = output + 'transition.mp4'
-        video = Video(video_filename, fps=params.get('fps', 1), scale=scale, normalise=True)
+        transition_filename = output + 'transition'
+        video = Video(transition_filename + '.mp4', fps=params.get('fps', 1))
         tsims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
         positions0 = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in tsims])
         center = np.mean(positions0, 0)
+        window = get_image_window(fused_image)
 
+        max_size = None
+        acum = 0
         for framei in range(nframes):
-            spacing1 = spacing[0] + (spacing[1] - spacing[0]) * framei / (nframes - 1) - 1
+            c = (1 - np.cos(framei / (nframes - 1) * 2 * math.pi)) / 2
+            acum += c / (nframes / 2)
+            spacing1 = spacing[0] + (spacing[1] - spacing[0]) * acum
             for tsim, position0 in zip(tsims, positions0):
                 transform = param_utils.identity_transform(ndim=2, t_coords=[0])
                 transform[0][:2, 2] += (position0 - center) * spacing1
                 si_utils.set_sim_affine(tsim, transform, transform_key=transition_transform_key)
-            frame = fusion.fuse(tsims, transform_key=transition_transform_key)
+            frame = fusion.fuse(tsims, transform_key=transition_transform_key).squeeze()
+            frame = float2int_image(normalise_values(frame, window[0], window[1]))
+            frame = cv.resize(np.asarray(frame), None, fx=scale, fy=scale)
+            if max_size is None:
+                max_size = frame.shape[1], frame.shape[0]
+                video.size = max_size
+            frame = image_reshape(frame, max_size)
+            save_tiff(transition_filename + f'{framei:04d}.tiff', frame, None, pixel_size)
             video.write(frame)
-        # repeat final frame
-        for framei in range(nframes):
-            video.write(frame)
+
         video.close()
 
 

@@ -1,7 +1,17 @@
-from tifffile import TiffWriter
+from tifffile import TiffWriter, tifffile
 
 from src.image.color_conversion import rgba_to_int
 from src.util import *
+
+
+def load_tiff(filename):
+    return tifffile.imread(filename)
+
+
+def save_tiff(filename, data, dimension_order, pixel_size, tile_size=(1024, 1024), compression='LZW'):
+    _, resolution, resolution_unit = create_tiff_metadata(pixel_size, dimension_order)
+    tifffile.imwrite(filename, data, tile=tile_size, compression=compression,
+                     resolution=resolution, resolutionunit=resolution_unit)
 
 
 def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], positions=[], rotation=None,
@@ -54,7 +64,7 @@ def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], position
     pixel_size_um = None
 
     if pixel_size is not None:
-        pixel_size_um = get_value_units_micrometer(pixel_size)
+        pixel_size_um = get_value_units_micrometer(pixel_size)[:2]
         resolution_unit = 'CENTIMETER'
         resolution = [1e4 / size for size in pixel_size_um]
 
