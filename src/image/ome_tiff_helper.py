@@ -8,7 +8,7 @@ def load_tiff(filename):
     return tifffile.imread(filename)
 
 
-def save_tiff(filename, data, dimension_order, pixel_size, tile_size=(1024, 1024), compression='LZW'):
+def save_tiff(filename, data, dimension_order=None, pixel_size=None, tile_size=(1024, 1024), compression='LZW'):
     _, resolution, resolution_unit = create_tiff_metadata(pixel_size, dimension_order)
     tifffile.imwrite(filename, data, tile=tile_size, compression=compression,
                      resolution=resolution, resolutionunit=resolution_unit)

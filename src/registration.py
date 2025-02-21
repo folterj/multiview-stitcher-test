@@ -62,12 +62,11 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, transform_key, flatfield_quantile=None,
+def init_tiles(files, transform_key,
                invert_x_coordinates=False, normalise_orientation=False, reset_coordinates=False,
                verbose=False):
     sims = []
     sources = [create_source(file) for file in files]
-    nchannels = sources[0].get_nchannels()
     images = []
     logging.info('Init tiles...')
     for source in tqdm(sources, disable=not verbose):
@@ -78,21 +77,6 @@ def init_tiles(files, transform_key, flatfield_quantile=None,
         image = redimension_data(source.get_source_dask()[0],
                                  source.dimension_order, output_order)
         images.append(image)
-
-    if flatfield_quantile is not None:
-        logging.info('Applying flatfield correction...')
-        dtype = images[0].dtype
-        norm_image_filename = f'resources/norm{flatfield_quantile}.tiff'
-        if os.path.exists(norm_image_filename):
-            logging.warning('Loading cached normalisation image')
-            max_image = load_tiff(norm_image_filename)
-        else:
-            norm_images = create_normalisation_images(images, quantiles=[flatfield_quantile], nchannels=nchannels)
-            max_image = norm_images[0]
-            maxval = 2 ** (8 * dtype.itemsize) - 1
-            max_image = max_image / np.float32(maxval)
-            save_tiff(norm_image_filename, max_image)
-        images = [float2int_image(flatfield_correction(int2float_image(image), bright=max_image), dtype) for image in images]
 
     translations = []
     rotations = []
@@ -162,6 +146,49 @@ def normalise_rotated_positions(positions0, rotations0, size):
         positions = positions0
         rotations = rotations0
     return positions, rotations
+
+
+def calc_foreground_map(sims):
+    if len(sims) <= 1:
+        return [True] * len(sims)
+    sims = [sim.squeeze().astype(np.float32) for sim in sims]
+    median_image = calc_images_median(sims).astype(np.float32)
+    difs = [np.mean(np.abs(sim - median_image), (0, 1)) for sim in sims]
+    # or use stddev instead of mean?
+    threshold = np.mean(difs, 0)
+    #threshold, _ = cv.threshold(np.array(difs).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
+    #threshold, foregrounds = filter_noise_images(channel_images)
+    map = (difs > threshold)
+    return map
+
+
+def flatfield_correction(sims, transform_key, foreground_map, flatfield_quantile):
+    new_sims = []
+    dtype = sims[0].dtype
+    norm_image_filename = f'resources/norm{flatfield_quantile}.tiff'
+    if os.path.exists(norm_image_filename):
+        logging.warning('Loading cached normalisation image')
+        max_image = load_tiff(norm_image_filename)
+    else:
+        back_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if not is_foreground]
+        norm_images = create_quantile_images(back_sims, quantiles=[flatfield_quantile])
+        max_image = norm_images[0]
+        maxval = 2 ** (8 * dtype.itemsize) - 1
+        max_image = max_image / np.float32(maxval)
+        save_tiff(norm_image_filename, max_image)
+    for sim in sims:
+        image = float2int_image(image_flatfield_correction(int2float_image(sim), bright=max_image), dtype)
+        new_sim = si_utils.get_sim_from_array(
+            image,
+            dims=sim.dims,
+            scale=si_utils.get_spacing_from_sim(sim),
+            translation=si_utils.get_origin_from_sim(sim),
+            transform_key=transform_key,
+            affine=si_utils.get_affine_from_sim(sim, transform_key),
+            c_coords=sim.c
+        )
+        new_sims.append(new_sim)
+    return new_sims
 
 
 def normalise(sims, transform_key, use_global=True):
@@ -329,6 +356,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     else:
         reg_channel_index = None
 
+    flatfield_quantile = params.get('flatfield_quantile')
     normalisation = params.get('normalisation', False)
     filter_foreground = params.get('filter_foreground', False)
     use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
@@ -341,7 +369,11 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     z_scale = extra_metadata.get('scale', {}).get('z', 1)
     is_stack = ('stack' in operation)
     is_channel_overlay = (len(channels) > 1)
-    # normalisation
+
+    foreground_map = calc_foreground_map(sims0)
+
+    sims0 = flatfield_correction(sims0, source_transform_key, foreground_map, flatfield_quantile)
+
     if normalisation:
         use_global = not is_channel_overlay
         if use_global:
@@ -357,13 +389,13 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
 
     if filter_foreground:
         logging.info('Filtering foreground tiles...')
-        tile_vars = np.array([np.asarray(np.std(sim)).item() for sim in sims])
-        threshold1 = np.mean(tile_vars)
-        threshold2 = np.median(tile_vars)
-        threshold3, _ = cv.threshold(np.array(tile_vars).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
-        threshold = min(threshold1, threshold2, threshold3)
-        foregrounds = (tile_vars >= threshold)
-        foreground_msims = [msim for msim, foreground in zip(msims, foregrounds) if foreground]
+        #tile_vars = np.array([np.asarray(np.std(sim)).item() for sim in sims])
+        #threshold1 = np.mean(tile_vars)
+        #threshold2 = np.median(tile_vars)
+        #threshold3, _ = cv.threshold(np.array(tile_vars).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
+        #threshold = min(threshold1, threshold2, threshold3)
+        #foregrounds = (tile_vars >= threshold)
+        foreground_msims = [msim for msim, is_foreground in zip(msims, foreground_map) if is_foreground]
 
         if show_filtered:
             filtered_filename = params['output'] + 'filtered.png'
@@ -385,7 +417,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 transform_key=reg_transform_key,
                 base_transform_key=source_transform_key)
 
-        indices = np.where(foregrounds)[0]
+        indices = np.where(foreground_map)[0]
         register_msims = foreground_msims
     else:
         indices = range(len(msims))
@@ -584,7 +616,6 @@ def run_operation_files(filenames, params, params_general):
     is_transition = ('transition' in operation)
     output_params = params_general.get('output', {})
     invert_x_coordinates = params.get('invert_x_coordinates', False)
-    flatfield_quantile = params.get('flatfield_quantile')
     normalise_orientation = params.get('normalise_orientation', False)
     reset_coordinates = params.get('reset_coordinates', False)
     extra_metadata = params.get('extra_metadata', {})
@@ -592,8 +623,6 @@ def run_operation_files(filenames, params, params_general):
     clear = output_params.get('clear', False)
 
     show_original = params_general.get('show_original', False)
-    npyramid_add = params_general.get('npyramid_add', 0)
-    pyramid_downsample = params_general.get('pyramid_downsample', 2)
     verbose = params_general.get('verbose', False)
 
     source_transform_key = 'stage_metadata'
@@ -617,7 +646,7 @@ def run_operation_files(filenames, params, params_general):
         os.makedirs(output_dir)
 
     logging.info('Initialising tiles...')
-    sims, positions, rotations = init_tiles(filenames, source_transform_key, flatfield_quantile=flatfield_quantile,
+    sims, positions, rotations = init_tiles(filenames, source_transform_key,
                                             invert_x_coordinates=invert_x_coordinates,
                                             normalise_orientation=normalise_orientation,
                                             reset_coordinates=reset_coordinates,
@@ -627,7 +656,7 @@ def run_operation_files(filenames, params, params_general):
     if len(filenames) == 1:
         logging.warning('Skipping registration (single tile)')
         save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
-                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
+                   params=output_params)
         return
 
     if show_original:
@@ -643,7 +672,7 @@ def run_operation_files(filenames, params, params_general):
         original_fused = fusion.fuse(sims, transform_key=source_transform_key)
         original_fused_filename = output + 'original'
         save_image(original_fused_filename, original_fused, transform_key=source_transform_key,
-                   npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
+                   params=output_params)
 
     results = register(sims, source_transform_key, reg_transform_key, params, params_general)
     fused_image = results['fused_image']
@@ -690,7 +719,7 @@ def run_operation_files(filenames, params, params_general):
     logging.info('Saving fused image...')
     save_image(registered_fused_filename, fused_image,
                transform_key=reg_transform_key, channels=channels, translation0=positions[0],
-               npyramid_add=npyramid_add, pyramid_downsample=pyramid_downsample, params=output_params)
+               params=output_params)
 
     if is_transition:
         logging.info('Creating transition...')
