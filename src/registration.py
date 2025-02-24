@@ -70,8 +70,8 @@ def init_tiles(files, transform_key,
     images = []
     logging.info('Init tiles...')
     for source in tqdm(sources, disable=not verbose):
-        output_order = 'yx'
-        #output_order = 'zyx'
+        #output_order = 'yx'
+        output_order = 'zyx'
         if source.get_nchannels() > 1:
             output_order += 'c'
         image = redimension_data(source.get_source_dask()[0],
@@ -345,6 +345,7 @@ def pairwise_registration_cpd(
 def register(sims0, source_transform_key, reg_transform_key, params, params_general):
     global pixel_size_xyz
     sim0 = sims0[0]
+    ndims = si_utils.get_ndim_from_sim(sim0)
     pixel_size_xyz = [si_utils.get_spacing_from_sim(sim0).get(dim, 1) for dim in 'xyz']
 
     operation = params['operation']
@@ -370,9 +371,11 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     is_stack = ('stack' in operation)
     is_channel_overlay = (len(channels) > 1)
 
-    foreground_map = calc_foreground_map(sims0)
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
 
-    sims0 = flatfield_correction(sims0, source_transform_key, foreground_map, flatfield_quantile)
+    foreground_map = calc_foreground_map(sims0)
+    if flatfield_quantile is not None:
+        sims0 = flatfield_correction(sims0, source_transform_key, foreground_map, flatfield_quantile)
 
     if normalisation:
         use_global = not is_channel_overlay
@@ -384,9 +387,6 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     else:
         sims = sims0
 
-    msims0 = [msi_utils.get_msim_from_sim(sim) for sim in sims0]
-    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-
     if filter_foreground:
         logging.info('Filtering foreground tiles...')
         #tile_vars = np.array([np.asarray(np.std(sim)).item() for sim in sims])
@@ -395,42 +395,29 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         #threshold3, _ = cv.threshold(np.array(tile_vars).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
         #threshold = min(threshold1, threshold2, threshold3)
         #foregrounds = (tile_vars >= threshold)
-        foreground_msims = [msim for msim, is_foreground in zip(msims, foreground_map) if is_foreground]
+        foreground_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if is_foreground]
 
         if show_filtered:
             filtered_filename = params['output'] + 'filtered.png'
-            vis_utils.plot_positions(foreground_msims, transform_key=source_transform_key, use_positional_colors=False,
+            vis_utils.plot_positions(foreground_sims, transform_key=source_transform_key, use_positional_colors=False,
                                      view_labels_size=3, show_plot=verbose, output_filename=filtered_filename)
 
-        logging.info(f'Foreground tiles: {len(foreground_msims)} / {len(msims)}')
-
-        # duplicate transform keys
-        for msim0, msim in zip (msims0, msims):
-            msi_utils.set_affine_transform(
-                msim0,
-                param_utils.identity_transform(ndim=2, t_coords=[0]),
-                transform_key=reg_transform_key,
-                base_transform_key=source_transform_key)
-            msi_utils.set_affine_transform(
-                msim,
-                param_utils.identity_transform(ndim=2, t_coords=[0]),
-                transform_key=reg_transform_key,
-                base_transform_key=source_transform_key)
+        logging.info(f'Foreground tiles: {len(foreground_sims)} / {len(sims)}')
 
         indices = np.where(foreground_map)[0]
-        register_msims = foreground_msims
+        register_sims = foreground_sims
     else:
-        indices = range(len(msims))
-        register_msims = msims
+        indices = range(len(sims))
+        register_sims = sims
 
     logging.info('Registering...')
     if verbose:
         progress = tqdm()
 
     if is_stack:
-        pairs = [(index, index + 1) for index in range(len(register_msims) - 1)]
+        register_sims = [si_utils.max_project_sim(sim, dim='z') for sim in register_sims]
+        pairs = [(index, index + 1) for index in range(len(register_sims) - 1)]
     elif use_orthogonal_pairs:
-        register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
         origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
         sim0 = register_sims[0]
         size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
@@ -438,36 +425,46 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         logging.info(f'#pairs: {len(pairs)}')
     else:
         pairs = None
+
+    # copy source to reg transform: for background sims skipped in registration
+    for sim in sims:
+        si_utils.set_sim_affine(
+            sim,
+            param_utils.identity_transform(ndim=ndims, t_coords=[0]),
+            transform_key=reg_transform_key,
+            base_transform_key=source_transform_key)
+
+    if 'dummy' in method:
+        pairwise_reg_func = pairwise_registration_dummy
+    elif 'feature' in method:
+        pairwise_reg_func = pairwise_registration_features
+    elif 'cpd' in method:
+        pairwise_reg_func = pairwise_registration_cpd
+    elif 'ant' in method:
+        pairwise_reg_func = registration.registration_ANTsPy
+    else:
+        pairwise_reg_func = registration.phase_correlation_registration
+    logging.info(f'Registration method: {pairwise_reg_func.__name__}')
+
+    if use_rotation:
+        pairwise_reg_func_kwargs = {
+            'transform_types': ['Rigid'],
+            "aff_random_sampling_rate": 0.5,
+            "aff_iterations": (2000, 2000, 1000, 1000),
+            "aff_smoothing_sigmas": (4, 2, 1, 0),
+            "aff_shrink_factors": (16, 8, 2, 1),
+        }
+        # these are the parameters for the groupwise registration (global optimization)
+        groupwise_resolution_kwargs = {
+            'transform': 'rigid',  # options include 'translation', 'rigid', 'affine'
+        }
+    else:
+        pairwise_reg_func_kwargs = None
+        groupwise_resolution_kwargs = None
+
+    register_msims = [msi_utils.get_msim_from_sim(sim) for sim in register_sims]
     with ProgressBar() if verbose else nullcontext():
         try:
-            if 'dummy' in method:
-                pairwise_reg_func = pairwise_registration_dummy
-            elif 'feature' in method:
-                pairwise_reg_func = pairwise_registration_features
-            elif 'cpd' in method:
-                pairwise_reg_func = pairwise_registration_cpd
-            elif 'ant' in method:
-                pairwise_reg_func = registration.registration_ANTsPy
-            else:
-                pairwise_reg_func = registration.phase_correlation_registration
-            logging.info(f'Registration method: {pairwise_reg_func.__name__}')
-
-            if use_rotation:
-                pairwise_reg_func_kwargs = {
-                    'transform_types': ['Rigid'],
-                    "aff_random_sampling_rate": 0.5,
-                    "aff_iterations": (2000, 2000, 1000, 1000),
-                    "aff_smoothing_sigmas": (4, 2, 1, 0),
-                    "aff_shrink_factors": (16, 8, 2, 1),
-                }
-                # these are the parameters for the groupwise registration (global optimization)
-                groupwise_resolution_kwargs = {
-                    'transform': 'rigid',  # options include 'translation', 'rigid', 'affine'
-                }
-            else:
-                pairwise_reg_func_kwargs = None
-                groupwise_resolution_kwargs = None
-
             mappings, metrics = registration.register(
                 register_msims,
                 reg_channel=reg_channel,
@@ -506,22 +503,23 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 norm_distance = np.sum(distances) / np.linalg.norm(size)
                 confidence = 1 - min(math.sqrt(norm_distance), 1)
 
-            for msim, msim0 in zip(msims, msims0):
+            # copy transforms from register msims to unmodified msims
+            for reg_msim, index in zip(register_msims, indices):
                 msi_utils.set_affine_transform(
-                    msim0,
-                    msi_utils.get_transform_from_msim(msim, transform_key=reg_transform_key),
+                    msims[index],
+                    msi_utils.get_transform_from_msim(reg_msim, transform_key=reg_transform_key),
                     transform_key=reg_transform_key)
 
         except NotEnoughOverlapError:
             final_residual = 0
             confidence = 0
-            for msim0 in msims0:
+            for msim in msims:
                 msi_utils.set_affine_transform(
-                    msim0,
-                    param_utils.identity_transform(ndim=2, t_coords=[0]),
+                    msim,
+                    param_utils.identity_transform(ndim=ndims, t_coords=[0]),
                     transform_key=reg_transform_key,
                     base_transform_key=source_transform_key)
-            mappings_dict = {index: np.eye(3) for index, _ in enumerate(msims0)}
+            mappings_dict = {index: np.eye(ndims + 1) for index, _ in enumerate(msims)}
 
     if verbose:
         progress.update()
@@ -529,8 +527,13 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
 
     logging.info('Fusing...')
     # convert to multichannel images
-    sims0 = [msi_utils.get_sim_from_msim(msim) for msim in msims0]
     if is_stack:
+        # set 3D affine transforms from 2D registration params
+        for iview, sim in enumerate(sims):
+            affine_3d = param_utils.identity_transform(ndim=3)
+            affine_3d.loc[{pdim: mappings[iview].coords[pdim] for pdim in mappings[iview].sel(t=0).dims}] = mappings[iview].sel(t=0)
+            si_utils.set_sim_affine(sim, affine_3d, transform_key=source_transform_key, base_transform_key=reg_transform_key)
+
         output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
         # calculate output stack properties from input views
         output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
@@ -571,7 +574,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     return {'mappings': mappings_dict,
             'final_residual': final_residual,
             'confidence': confidence,
-            'msims': msims0,
+            'msims': msims,
             'fused_image': fused_image}
 
 
@@ -709,17 +712,17 @@ def run_operation_files(filenames, params, params_general):
         print('Mappings:')
         print(mappings2)
 
+    logging.info('Saving fused image...')
+    save_image(registered_fused_filename, fused_image,
+               transform_key=reg_transform_key, channels=channels, translation0=positions[0],
+               params=output_params)
+
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
     registered_positions_filename = output + 'positions_registered.png'
     vis_utils.plot_positions(msims, transform_key=reg_transform_key, use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=verbose, output_filename=registered_positions_filename)
-
-    logging.info('Saving fused image...')
-    save_image(registered_fused_filename, fused_image,
-               transform_key=reg_transform_key, channels=channels, translation0=positions[0],
-               params=output_params)
 
     if is_transition:
         logging.info('Creating transition...')

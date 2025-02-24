@@ -3,7 +3,7 @@ general:
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
   break_on_error: False
-  verbose: False
+  verbose: True
   output:
     clear: True
     format: ome.zarr
@@ -19,5 +19,5 @@ operations:
     normalisation: True
     use_rotation: True
     method: cpd
-    extra_metadata: {'scale': {'z': 0.01}}
+    extra_metadata: {'scale': {'z': 0.05}}
     output: aligned/

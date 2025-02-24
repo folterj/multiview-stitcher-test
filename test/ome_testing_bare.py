@@ -1,5 +1,5 @@
 import dask.array as da
-from multiview_stitcher import fusion
+from multiview_stitcher import fusion, registration, vis_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 from pathlib import Path
@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import traceback
 import xarray as xr
 
+from src.image.ome_helper import save_image
 from src.image.util import *
 
 
@@ -177,10 +178,73 @@ def test4(sims, tmp_path):
     return fused_image
 
 
+def test5(sims, tmp_path):
+
+    transform_key = 'stage_metadata'
+    new_transform_key = 'registered'
+
+    # register in 2D
+    # pairs: pairwise consecutive views
+    sims_2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
+    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims_2d]
+    params = registration.register(
+        msims,
+        reg_channel=sims[0].coords['c'].values[0],
+        transform_key=transform_key,
+        new_transform_key=new_transform_key,
+        pairs = [(i, i+1) for i in range(len(sims)-1)],
+    )
+
+    # set 3D affine transforms from 2D registration params
+    for iview, sim in enumerate(sims):
+        affine_3d = param_utils.identity_transform(ndim=3)
+        affine_3d.loc[{pdim: params[iview].coords[pdim] for pdim in params[iview].sel(t=0).dims}] = params[iview].sel(t=0)
+        si_utils.set_sim_affine(sim, affine_3d, transform_key=new_transform_key, base_transform_key=transform_key)
+
+    # continue with new transform key
+    transform_key = new_transform_key
+
+    z_scale = 0.5
+
+    # set output spacing
+    output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
+
+    # calculate output stack properties from input views
+    output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+        [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+        [np.array(si_utils.get_affine_from_sim(sim, transform_key).squeeze()) for sim in sims],
+        output_spacing,
+        mode='union',
+    )
+
+    # convert to dict form
+    output_stack_properties = {
+        k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+        for k, v in output_stack_properties.items()
+    }
+
+    # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
+    # because it does not take into account the correct input z spacing because of stacks of one z plane
+    output_stack_properties['shape']['z'] = len(sims)
+
+    # fuse all sims together using simple average fusion
+    fused_image = fusion.fuse(
+        sims,
+        transform_key=transform_key,
+        output_stack_properties=output_stack_properties,
+        output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
+        fusion_func=fusion.simple_average_fusion,
+    )
+
+    vis_utils.plot_positions(msims, transform_key=new_transform_key, use_positional_colors=False)
+
+    save_image(tmp_path / 'fused', fused_image, transform_key=transform_key, params={'format': 'tif'})
+
+
 def test_pipeline(tmp_path, ntiles=2):
     #sims, translations, rotations = test_init_tiles(tmp_path, ntiles)
     sims = test_init_tiles_simple(ntiles)
-    test4(sims, tmp_path)
+    test5(sims, tmp_path)
     print(tmp_path)
     pass
 
