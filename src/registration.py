@@ -532,10 +532,10 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     # convert to multichannel images
     if is_stack:
         # set 3D affine transforms from 2D registration params
-        for iview, sim in enumerate(sims):
+        for index, sim in enumerate(sims):
             affine_3d = param_utils.identity_transform(ndim=3)
-            affine_3d.loc[{pdim: mappings[iview].coords[pdim] for pdim in mappings[iview].sel(t=0).dims}] = mappings[iview].sel(t=0)
-            si_utils.set_sim_affine(sim, affine_3d, transform_key=source_transform_key, base_transform_key=reg_transform_key)
+            affine_3d.loc[{dim: mappings[index].coords[dim] for dim in mappings[index].sel(t=0).dims}] = mappings[index].sel(t=0)
+            si_utils.set_sim_affine(sim, affine_3d, transform_key=reg_transform_key, base_transform_key=source_transform_key)
 
         output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
         # calculate output stack properties from input views
