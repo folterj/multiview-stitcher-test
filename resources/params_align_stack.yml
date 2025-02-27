@@ -2,11 +2,12 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
+  show_filtered: False
   break_on_error: False
   verbose: True
   output:
     clear: True
-    format: ome.zarr
+    format: ome.zarr, ome.tiff
     tile_size: []
     compression: []
     npyramid_add: 4

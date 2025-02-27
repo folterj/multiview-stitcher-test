@@ -42,6 +42,15 @@ def redimension_data(data, old_order, new_order, **indices):
     return new_data
 
 
+def calc_shape(y, x, offset):
+    #y, x = args
+    h, w = y.shape
+    xoffset, yoffset = offset
+    image = (1 + np.cos((xoffset + x / w) * 2 * np.pi)
+             * np.cos((yoffset + y / h) * 2 * np.pi)) / 2
+    return image
+
+
 def test_init_tiles_simple(ntiles=2):
     dimension_order0 = 'yx'
     dimension_order = 'zyx'
@@ -49,14 +58,22 @@ def test_init_tiles_simple(ntiles=2):
     chunks = (256, 256)
     pixel_size = [0.1, 0.1]
     z_scale = 0.5
+    dtype = np.dtype(np.uint16)
 
     z_position = 0
+    offset = [0, 0]
     sims = []
     for filei in range(ntiles):
         position = list(np.random.rand(2)) + [z_position]
         z_position += z_scale
+        shape_image = np.fromfunction(calc_shape, tuple(size), dtype=np.float32, offset=offset)
+        noise_image = np.random.random_sample(size)
+        pattern_image = float2int_image(
+            np.clip(0.9 * shape_image + 0.1 * noise_image, 0, 1),
+            target_dtype=dtype)
+
         data = xr.DataArray(
-            da.random.randint(0, 65535, size=size, chunks=chunks, dtype=da.uint16),
+            pattern_image,
             dims=list(dimension_order0)
         )
         data = redimension_data(data, dimension_order0, dimension_order)    # always add z axis to store z position
@@ -74,6 +91,8 @@ def test_init_tiles_simple(ntiles=2):
             transform_key='stage_metadata'
         )
         sims.append(sim)
+        offset[0] += 0.05
+        offset[1] -= 0.01
     return sims
 
 
@@ -185,10 +204,10 @@ def test5(sims, tmp_path):
 
     # register in 2D
     # pairs: pairwise consecutive views
-    sims_2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
-    msims = [msi_utils.get_msim_from_sim(sim) for sim in sims_2d]
+    reg_sims = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
+    reg_msims = [msi_utils.get_msim_from_sim(sim) for sim in reg_sims]
     params = registration.register(
-        msims,
+        reg_msims,
         reg_channel=sims[0].coords['c'].values[0],
         transform_key=transform_key,
         new_transform_key=new_transform_key,
@@ -196,9 +215,9 @@ def test5(sims, tmp_path):
     )
 
     # set 3D affine transforms from 2D registration params
-    for iview, sim in enumerate(sims):
+    for index, sim in enumerate(sims):
         affine_3d = param_utils.identity_transform(ndim=3)
-        affine_3d.loc[{pdim: params[iview].coords[pdim] for pdim in params[iview].sel(t=0).dims}] = params[iview].sel(t=0)
+        affine_3d.loc[{dim: params[index].coords[dim] for dim in params[index].sel(t=0).dims}] = params[index].sel(t=0)
         si_utils.set_sim_affine(sim, affine_3d, transform_key=new_transform_key, base_transform_key=transform_key)
 
     # continue with new transform key
@@ -236,9 +255,9 @@ def test5(sims, tmp_path):
         fusion_func=fusion.simple_average_fusion,
     )
 
-    vis_utils.plot_positions(msims, transform_key=new_transform_key, use_positional_colors=False)
+    vis_utils.plot_positions(reg_msims, transform_key=new_transform_key, use_positional_colors=False)
 
-    save_image(tmp_path / 'fused', fused_image, transform_key=transform_key, params={'format': 'tif'})
+    save_image(tmp_path / 'fused', fused_image, transform_key=transform_key, params={'format': 'tif, zar'})
 
 
 def test_pipeline(tmp_path, ntiles=2):

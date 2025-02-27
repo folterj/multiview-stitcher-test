@@ -63,6 +63,16 @@ def float2int_image(image, target_dtype=np.dtype(np.uint8)):
         return image
 
 
+def uint8_image(image):
+    source_dtype = image.dtype
+    if source_dtype.kind == 'f':
+        image = image * 255
+    elif source_dtype.itemsize != 1:
+        factor = 2 ** (8 * (source_dtype.itemsize - 1))
+        image = image // factor
+    return image.astype(np.uint8)
+
+
 def ensure_unsigned_type(dtype: np.dtype) -> np.dtype:
     new_dtype = dtype
     if dtype.kind == 'i' or dtype.byteorder == '>' or dtype.byteorder == '<':
@@ -573,7 +583,7 @@ def detect_area_points(image):
     threshold = -5
     contours = []
     while len(contours) <= 1 and threshold <= 255:
-        _, binimage = cv.threshold(image, threshold, 255, method)
+        _, binimage = cv.threshold(uint8_image(image), threshold, 255, method)
         contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
         contours = contours0[0] if len(contours0) == 2 else contours0[1]
         method = cv.THRESH_BINARY

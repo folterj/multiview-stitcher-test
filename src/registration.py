@@ -30,6 +30,7 @@ from src.util import *
 
 ndims = 3
 pixel_size_xyz = [1, 1, 1]
+source_type = np.uint8
 
 
 def init_logging(params_general):
@@ -63,24 +64,24 @@ def create_source(filename):
     return source
 
 
-def init_tiles(files, transform_key, d3=False,
+def init_tiles(files, transform_key, d3=False, z_scale=1,
                invert_x_coordinates=False, normalise_orientation=False, reset_coordinates=False,
                verbose=False):
+    logging.info('Init tiles...')
     sims = []
     sources = [create_source(file) for file in files]
     images = []
-    logging.info('Init tiles...')
-    for source in tqdm(sources, disable=not verbose):
-        output_order = 'zyx' if d3 else 'yx'
-        if source.get_nchannels() > 1:
-            output_order += 'c'
-        image = redimension_data(source.get_source_dask()[0],
-                                 source.dimension_order, output_order)
-        images.append(image)
-
     translations = []
     rotations = []
-    for source, image in zip(sources, images):
+
+    source0 = sources[0]
+    output_order = 'zyx' if d3 else 'yx'
+    if source0.get_nchannels() > 1:
+        output_order += 'c'
+
+    last_z_position = None
+    different_z_positions = False
+    for source in tqdm(sources, disable=not verbose):
         if reset_coordinates or len(source.get_position()) == 0:
             translation = np.zeros(3)
         else:
@@ -88,24 +89,38 @@ def init_tiles(files, transform_key, d3=False,
             if invert_x_coordinates:
                 translation[0] = -translation[0]
                 translation[1] = -translation[1]
+        if len(translation) >= 3:
+            z_position = translation[2]
+        else:
+            z_position = 0
+        if last_z_position is not None and z_position != last_z_position:
+            different_z_positions = False
         translations.append(translation)
         rotations.append(source.get_rotation())
+        image = redimension_data(source.get_source_dask()[0],
+                                 source.dimension_order, output_order)
+        images.append(image)
+        last_z_position = z_position
+
+    increase_z_positions = d3 and not different_z_positions
 
     if normalise_orientation:
-        source0 = sources[0]
         size = np.array(source0.get_size()) * source0.get_pixel_size_micrometer()
         translations, rotations = normalise_rotated_positions(translations, rotations, size)
 
     #translations = [np.array(translation) * 1.25 for translation in translations]
 
+    z_position = 0
     for source, image, translation, rotation in zip(sources, images, translations, rotations):
         # transform #dimensions need to match
         scale_dict = convert_xyz_to_dict(source.get_pixel_size_micrometer())
         if len(scale_dict) > 0 and 'z' not in scale_dict:
-            scale_dict['z'] = 1
+            scale_dict['z'] = z_scale
         translation_dict = convert_xyz_to_dict(translation)
-        if len(translation_dict) > 0 and 'z' not in translation_dict:
-            translation_dict['z'] = 0
+        if (len(translation_dict) > 0 and 'z' not in translation_dict) or increase_z_positions:
+            translation_dict['z'] = z_position
+        if increase_z_positions:
+            z_position += z_scale
         channel_labels = [channel.get('label', '') for channel in source.get_channels()]
         if rotation is None or normalise_orientation:
             transform = None
@@ -195,13 +210,14 @@ def flatfield_correction(sims, transform_key, foreground_map, flatfield_quantile
 
 def normalise(sims, transform_key, use_global=True):
     new_sims = []
+    dtype = sims[0].dtype
     # global mean and stddev
     if use_global:
         mins = []
         ranges = []
         for sim in sims:
-            min = np.mean(sim)
-            range = np.std(sim)
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
             #min, max = get_image_window(sim, low=0.01, high=0.99)
             #range = max - min
             mins.append(min)
@@ -214,9 +230,9 @@ def normalise(sims, transform_key, use_global=True):
     # normalise all images
     for sim in sims:
         if not use_global:
-            min = np.mean(sim)
-            range = np.std(sim)
-        image = float2int_image(np.clip((sim - min) / range, 0, 1))
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
+        image = float2int_image(np.clip((sim - min) / range, 0, 1), dtype)
         new_sim = si_utils.get_sim_from_array(
             image,
             dims=sim.dims,
@@ -324,8 +340,8 @@ def pairwise_registration_cpd(
 
     max_iter = kwargs.get('max_iter', 1000)
 
-    fixed_points = points_to_3d([point for point, area in detect_area_points(fixed_data.data)])
-    moving_points = points_to_3d([point for point, area in detect_area_points(moving_data.data)])
+    fixed_points = points_to_3d([point for point, area in detect_area_points(fixed_data.data.astype(source_type))])
+    moving_points = points_to_3d([point for point, area in detect_area_points(moving_data.data.astype(source_type))])
 
     if len(moving_points) > 1 and len(fixed_points) > 1:
         result_cpd = cpd.registration_cpd(moving_points, fixed_points, maxiter=max_iter)
@@ -345,10 +361,11 @@ def pairwise_registration_cpd(
 
 
 def register(sims0, source_transform_key, reg_transform_key, params, params_general):
-    global ndims, pixel_size_xyz
+    global ndims, pixel_size_xyz, source_type
     sim0 = sims0[0]
     ndims = si_utils.get_ndim_from_sim(sim0)
     pixel_size_xyz = [si_utils.get_spacing_from_sim(sim0).get(dim, 1) for dim in 'xyz']
+    source_type = sim0.dtype
 
     operation = params['operation']
     method = params.get('method', '').lower()
@@ -398,7 +415,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         foreground_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if is_foreground]
 
         if show_filtered:
-            filtered_filename = params['output'] + 'filtered.png'
+            filtered_filename = params['output'] + 'filtered.pdf'
             vis_utils.plot_positions(foreground_sims, transform_key=source_transform_key, use_positional_colors=False,
                                      view_labels_size=3, show_plot=verbose, output_filename=filtered_filename)
 
@@ -465,7 +482,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     register_msims = [msi_utils.get_msim_from_sim(sim) for sim in register_sims]
     with ProgressBar() if verbose else nullcontext():
         try:
-            mappings, metrics = registration.register(
+            reg_result = registration.register(
                 register_msims,
                 reg_channel=reg_channel,
                 reg_channel_index=reg_channel_index,
@@ -485,10 +502,13 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 plot_summary=True,
                 return_metrics=True
             )
-            register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
+            #register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
             sims = sims0
 
+            mappings = reg_result['params']
+            metrics = reg_result['groupwise_resolution_metrics']
             final_residual = list(metrics['mean_residual'])[-1]
+            summary_plot = reg_result['summary_plot']
 
             mappings_dict = {index: mapping.data[0] for index, mapping in zip(indices, mappings)}
             distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
@@ -504,14 +524,6 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
                 norm_distance = np.sum(distances) / np.linalg.norm(size)
                 confidence = 1 - min(math.sqrt(norm_distance), 1)
-
-            # copy transforms from register msims to unmodified msims
-            for reg_sim, index in zip(register_sims, indices):
-                si_utils.set_sim_affine(
-                    sims[index],
-                    si_utils.get_affine_from_sim(reg_sim, transform_key=reg_transform_key),
-                    transform_key=reg_transform_key)
-
         except NotEnoughOverlapError:
             final_residual = 0
             confidence = 0
@@ -554,10 +566,13 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         # because it does not take into account the correct input z spacing because of stacks of one z plane
         output_stack_properties['shape']['z'] = len(sims)
         # fuse all sims together using simple average fusion
+
+        # sims Z coords need to be correctly set!
         fused_image = fusion.fuse(
             sims,
             transform_key=reg_transform_key,
             output_stack_properties=output_stack_properties,
+            output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
             fusion_func=fusion.simple_average_fusion,
         )
     elif is_channel_overlay:
@@ -565,6 +580,7 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         channel_sims = [fusion.fuse(
             [sim],
             transform_key=reg_transform_key,
+            output_chunksize={'y': 1024, 'x': 1024},
             output_stack_properties=output_stack_properties
         ) for sim in sims]
         channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
@@ -572,11 +588,13 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     else:
         fused_image = fusion.fuse(
             sims,
-            transform_key=reg_transform_key
+            transform_key=reg_transform_key,
+            output_chunksize={'y': 1024, 'x': 1024},
         )
     return {'mappings': mappings_dict,
             'final_residual': final_residual,
             'confidence': confidence,
+            'summary_plot': summary_plot,
             'sims': sims,
             'fused_image': fused_image}
 
@@ -627,6 +645,7 @@ def run_operation_files(filenames, params, params_general):
     reset_coordinates = params.get('reset_coordinates', False)
     extra_metadata = params.get('extra_metadata', {})
     channels = extra_metadata.get('channels', [])
+    z_scale = extra_metadata.get('scale', {}).get('z', 1)
     clear = output_params.get('clear', False)
 
     show_original = params_general.get('show_original', False)
@@ -653,7 +672,7 @@ def run_operation_files(filenames, params, params_general):
         os.makedirs(output_dir)
 
     logging.info('Initialising tiles...')
-    sims, positions, rotations = init_tiles(filenames, source_transform_key, d3=is_stack,
+    sims, positions, rotations = init_tiles(filenames, source_transform_key, d3=is_stack, z_scale=z_scale,
                                             invert_x_coordinates=invert_x_coordinates,
                                             normalise_orientation=normalise_orientation,
                                             reset_coordinates=reset_coordinates,
@@ -670,7 +689,7 @@ def run_operation_files(filenames, params, params_general):
         # before registration:
         logging.info('Plotting tiles...')
         msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
-        original_positions_filename = output + 'positions_original.png'
+        original_positions_filename = output + 'positions_original.pdf'
         vis_utils.plot_positions(msims, transform_key=source_transform_key, use_positional_colors=False,
                                  view_labels=file_indices, view_labels_size=3,
                                  show_plot=verbose, output_filename=original_positions_filename)
@@ -723,10 +742,14 @@ def run_operation_files(filenames, params, params_general):
 
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
-    registered_positions_filename = output + 'positions_registered.png'
+    registered_positions_filename = output + 'positions_registered.pdf'
     vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=reg_transform_key, use_positional_colors=False,
                              view_labels=file_indices, view_labels_size=3,
                              show_plot=verbose, output_filename=registered_positions_filename)
+
+    figure, axes = results['summary_plot']
+    summary_plot_filename = output + 'summary_plot.pdf'
+    figure.savefig(summary_plot_filename)
 
     if is_transition:
         logging.info('Creating transition...')
