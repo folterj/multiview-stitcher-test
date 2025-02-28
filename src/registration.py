@@ -513,6 +513,8 @@ def register(sims, source_transform_key, reg_transform_key, params, params_gener
             metrics = reg_result['groupwise_resolution_metrics']
             final_residual = list(metrics['mean_residual'])[-1]
             summary_plot = reg_result['summary_plot']
+            #reg_result['pairwise_reg_graph']
+            #reg_result['groupwise_res_graph']
 
             mappings_dict = {index: mapping.data[0] for index, mapping in zip(indices, mappings)}
             distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
@@ -689,7 +691,11 @@ def run_operation_files(filenames, params, params_general):
                                  show_plot=verbose, output_filename=original_positions_filename)
 
         logging.info('Fusing original...')
-        original_fused = fusion.fuse(sims, transform_key=source_transform_key)
+        if is_stack:
+            sims2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
+        else:
+            sims2d = sims
+        original_fused = fusion.fuse(sims2d, transform_key=source_transform_key)
         original_fused_filename = output + 'original'
         save_image(original_fused_filename, original_fused, transform_key=source_transform_key,
                    params=output_params)
