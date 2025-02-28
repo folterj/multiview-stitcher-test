@@ -5,6 +5,10 @@ from scipy.ndimage import gaussian_filter
 from skimage.transform import downscale_local_mean
 from tifffile import TiffFile
 
+from multiscale_spatial_image import MultiscaleSpatialImage
+from multiview_stitcher import msi_utils, param_utils
+from multiview_stitcher import spatial_image_utils as si_utils
+
 
 try:
     import matplotlib as mpl
@@ -549,16 +553,6 @@ def create_quantile_images(sims, quantiles):
     return quantile_images
 
 
-def image_flatfield_correction(image0, dark=0, bright=1, clip=True):
-    # Input/output: float images
-    # https://en.wikipedia.org/wiki/Flat-field_correction
-    mean_bright_dark = np.mean(bright - dark, (0, 1))
-    image = (image0 - dark) * mean_bright_dark / (bright - dark)
-    if clip:
-        image = np.clip(image, 0, 1)
-    return image
-
-
 def get_max_downsamples(shape, npyramid_add, pyramid_downsample):
     shape = list(shape)
     for i in range(npyramid_add):
@@ -601,5 +595,103 @@ def detect_area_points(image):
     return area_points
 
 
-def points_to_3d(points):
-    return [list(point) + [0] for point in points]
+def calc_foreground_map(sims):
+    if len(sims) <= 2:
+        return [True] * len(sims)
+    sims = [sim.squeeze().astype(np.float32) for sim in sims]
+    median_image = calc_images_median(sims).astype(np.float32)
+    difs = [np.mean(np.abs(sim - median_image), (0, 1)) for sim in sims]
+    # or use stddev instead of mean?
+    threshold = np.mean(difs, 0)
+    #threshold, _ = cv.threshold(np.array(difs).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
+    #threshold, foregrounds = filter_noise_images(channel_images)
+    map = (difs > threshold)
+    if np.all(map == False):
+        return [True] * len(sims)
+    return map
+
+
+def normalise(sims, transform_key, use_global=True):
+    new_sims = []
+    dtype = sims[0].dtype
+    # global mean and stddev
+    if use_global:
+        mins = []
+        ranges = []
+        for sim in sims:
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
+            #min, max = get_image_window(sim, low=0.01, high=0.99)
+            #range = max - min
+            mins.append(min)
+            ranges.append(range)
+        min = np.mean(mins)
+        range = np.mean(ranges)
+    else:
+        min = 0
+        range = 1
+    # normalise all images
+    for sim in sims:
+        if not use_global:
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
+        image = float2int_image(np.clip((sim - min) / range, 0, 1), dtype)
+        new_sim = si_utils.get_sim_from_array(
+            image,
+            dims=sim.dims,
+            scale=si_utils.get_spacing_from_sim(sim),
+            translation=si_utils.get_origin_from_sim(sim),
+            transform_key=transform_key,
+            affine=si_utils.get_affine_from_sim(sim, transform_key),
+            c_coords=sim.c
+        )
+        new_sims.append(new_sim)
+    return new_sims
+
+
+def get_translation_rotation_from_transform(transform, invert=False):
+    if len(transform.shape) == 3:
+        transform = transform[0]
+    if invert:
+        transform = param_utils.invert_coordinate_order(transform)
+    transform = np.array(transform)
+    translation = param_utils.translation_from_affine(transform)
+    if len(translation) == 2:
+        translation = list(translation) + [0]
+    rotation = get_rotation_from_transform(transform)
+    return translation, rotation
+
+
+def get_data_mapping(data, transform_key=None, transform=None, translation0=None, rotation=None):
+    if rotation is None:
+        rotation = 0
+
+    if isinstance(data, MultiscaleSpatialImage):
+        sim = msi_utils.get_sim_from_msim(data)
+    else:
+        sim = data
+    sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
+    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
+    origin = si_utils.get_origin_from_sim(sim)
+    translation = [origin[sdim] for sdim in sdims]
+
+    if len(translation) == 0:
+        translation = [0, 0]
+    if len(translation) == 2:
+        if translation0 is not None and len (translation0) == 3:
+            z = translation0[2]
+        else:
+            z = 0
+        translation = list(translation) + [z]
+
+    if transform is not None:
+        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+        translation = np.array(translation) + translation1
+        rotation += rotation1
+
+    if transform_key is not None:
+        transform1 = sim.transforms[transform_key]
+        translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
+        rotation += rotation1
+
+    return translation, rotation

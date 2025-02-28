@@ -11,7 +11,7 @@ import xarray as xr
 from src.image.ome_helper import save_image
 from src.image.ome_tiff_helper import save_ome_tiff
 from src.TiffSource import TiffSource
-from src.registration import init_tiles
+from src.MVSRegistration import init_tiles
 from src.util import *
 from src.image.util import *
 

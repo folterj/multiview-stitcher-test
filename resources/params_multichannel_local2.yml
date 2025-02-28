@@ -6,7 +6,7 @@ general:
   break_on_error: True
   verbose: True
   output:
-    format: ome.tiff
+    format: ome.tiff, ome.zarr
     tile_size: []
     compression: []
     npyramid_add: 4

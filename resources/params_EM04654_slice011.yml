@@ -7,25 +7,25 @@ general:
   output:
     clear: True
     overwrite: True
-    format: ome.tiff, ome.zarr
-    tile_size: []
-    compression: []
-    npyramid_add: 4
-    pyramid_downsample: 2
+    format: ome.zarr
+    #tile_size: []
+    #compression: []
+    #npyramid_add: 4
+    #pyramid_downsample: 2
 
 operations:
-#  - operation: register match s
-#    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-#    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
-#    normalise_orientation: True
-#    normalisation: True
-#    use_orthogonal_pairs: True
-#    method: phase_correlation
-#    output: ../../../stitched/slice{s}/
+  #- operation: register match s
+  #  #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
+  #  input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+  #  normalise_orientation: True
+  #  normalisation: True
+  #  use_orthogonal_pairs: True
+  #  method: phase_correlation
+  #  output: ../../../stitched/slice{s}/
 
   - operation: stack
     #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-    input: D:/slides/EM04654_slice011/stitched_subset/slice?????/registered.ome.tiff
+    input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
     reset_coordinates: False
     normalisation: True
     use_rotation: True

@@ -2,7 +2,7 @@ import zarr
 import ome_zarr.format
 from ome_zarr.writer import write_image
 
-from src.image.util import create_compression_filter
+from src.image.util import create_compression_filter, redimension_data
 from src.image.ome_zarr_util import create_axes_metadata, create_transformation_metadata, create_channel_ome_metadata
 
 
@@ -17,6 +17,12 @@ def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, transla
         storage_options['compressor'] = compressor
     if compression_filters is not None:
         storage_options['filters'] = compression_filters
+
+    if 'z' not in dimension_order:
+        # add Z dimension to be able to store Z position
+        new_dimension_order = dimension_order.replace('yx', 'zyx')
+        data = redimension_data(data, dimension_order, new_dimension_order)
+        dimension_order = new_dimension_order
 
     axes = create_axes_metadata(dimension_order)
 
