@@ -15,7 +15,8 @@ general:
 operations:
   - operation: register
     #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tiff
-    input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection3/*.ome.tiff
+    #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection3/*.ome.tiff
+    input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/*.ome.tiff
     flatfield_quantile: 0.95
     invert_x_coordinates: True
     filter_foreground: True

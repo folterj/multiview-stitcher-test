@@ -360,12 +360,13 @@ def pairwise_registration_cpd(
     }
 
 
-def register(sims0, source_transform_key, reg_transform_key, params, params_general):
+def register(sims, source_transform_key, reg_transform_key, params, params_general):
     global ndims, pixel_size_xyz, source_type
-    sim0 = sims0[0]
+    sim0 = sims[0]
     ndims = si_utils.get_ndim_from_sim(sim0)
     pixel_size_xyz = [si_utils.get_spacing_from_sim(sim0).get(dim, 1) for dim in 'xyz']
     source_type = sim0.dtype
+    size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
 
     operation = params['operation']
     method = params.get('method', '').lower()
@@ -390,9 +391,18 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
     is_stack = ('stack' in operation)
     is_channel_overlay = (len(channels) > 1)
 
-    foreground_map = calc_foreground_map(sims0)
+    if flatfield_quantile is not None or filter_foreground:
+        foreground_map = calc_foreground_map(sims)
     if flatfield_quantile is not None:
-        sims0 = flatfield_correction(sims0, source_transform_key, foreground_map, flatfield_quantile)
+        sims = flatfield_correction(sims, source_transform_key, foreground_map, flatfield_quantile)
+
+    # copy source to reg transform: in case not set by registration
+    for sim in sims:
+        si_utils.set_sim_affine(
+            sim,
+            param_utils.identity_transform(ndim=ndims, t_coords=[0]),
+            transform_key=reg_transform_key,
+            base_transform_key=source_transform_key)
 
     if normalisation:
         use_global = not is_channel_overlay
@@ -400,9 +410,9 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
             logging.info('Normalising tiles (global)...')
         else:
             logging.info('Normalising tiles...')
-        sims = normalise(sims0, source_transform_key, use_global=use_global)
+        register_sims = normalise(sims, source_transform_key, use_global=use_global)
     else:
-        sims = sims0
+        register_sims = sims
 
     if filter_foreground:
         logging.info('Filtering foreground tiles...')
@@ -412,44 +422,34 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
         #threshold3, _ = cv.threshold(np.array(tile_vars).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
         #threshold = min(threshold1, threshold2, threshold3)
         #foregrounds = (tile_vars >= threshold)
-        foreground_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if is_foreground]
+        register_sims = [sim for sim, is_foreground in zip(register_sims, foreground_map) if is_foreground]
 
         if show_filtered:
             filtered_filename = params['output'] + 'filtered.pdf'
-            vis_utils.plot_positions(foreground_sims, transform_key=source_transform_key, use_positional_colors=False,
+            vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in register_sims],
+                                     transform_key=source_transform_key, use_positional_colors=False,
                                      view_labels_size=3, show_plot=verbose, output_filename=filtered_filename)
 
-        logging.info(f'Foreground tiles: {len(foreground_sims)} / {len(sims)}')
+        logging.info(f'Foreground tiles: {len(register_sims)} / {len(sims)}')
 
         indices = np.where(foreground_map)[0]
-        register_sims = foreground_sims
     else:
         indices = range(len(sims))
-        register_sims = sims
 
     logging.info('Registering...')
     if verbose:
         progress = tqdm()
 
     if is_stack:
+        # register in 2d; pairwise consecutive views
         register_sims = [si_utils.max_project_sim(sim, dim='z') for sim in register_sims]
         pairs = [(index, index + 1) for index in range(len(register_sims) - 1)]
     elif use_orthogonal_pairs:
         origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
-        sim0 = register_sims[0]
-        size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
         pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
         logging.info(f'#pairs: {len(pairs)}')
     else:
         pairs = None
-
-    # copy source to reg transform: for background sims skipped in registration
-    for sim in sims0:
-        si_utils.set_sim_affine(
-            sim,
-            param_utils.identity_transform(ndim=ndims, t_coords=[0]),
-            transform_key=reg_transform_key,
-            base_transform_key=source_transform_key)
 
     if 'dummy' in method:
         pairwise_reg_func = pairwise_registration_dummy
@@ -502,8 +502,12 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 plot_summary=True,
                 return_metrics=True
             )
-            #register_sims = [msi_utils.get_sim_from_msim(msim) for msim in register_msims]
-            sims = sims0
+            # copy transforms from register sims to unmodified sims
+            for reg_msim, index in zip(register_msims, indices):
+                si_utils.set_sim_affine(
+                    sims[index],
+                    msi_utils.get_transform_from_msim(reg_msim, transform_key=reg_transform_key),
+                    transform_key=reg_transform_key)
 
             mappings = reg_result['params']
             metrics = reg_result['groupwise_resolution_metrics']
@@ -519,20 +523,11 @@ def register(sims0, source_transform_key, reg_transform_key, params, params_gene
                 cvar = np.std(distances) / np.mean(distances)
                 confidence = 1 - min(cvar / 10, 1)
             else:
-                sim0 = sims[0]
-                spatial_dims = si_utils.get_spatial_dims_from_sim(sim0)
-                size = [sim0.sizes[dim] * si_utils.get_spacing_from_sim(sim0)[dim] for dim in spatial_dims]
                 norm_distance = np.sum(distances) / np.linalg.norm(size)
                 confidence = 1 - min(math.sqrt(norm_distance), 1)
         except NotEnoughOverlapError:
             final_residual = 0
             confidence = 0
-            for sim in sims:
-                si_utils.set_sim_affine(
-                    sim,
-                    param_utils.identity_transform(ndim=ndims, t_coords=[0]),
-                    transform_key=reg_transform_key,
-                    base_transform_key=source_transform_key)
             mappings = [param_utils.identity_transform(ndim=ndims, t_coords=[0])] * len(sims)
             mappings_dict = {index: np.eye(ndims + 1) for index, _ in enumerate(sims)}
 
@@ -688,10 +683,9 @@ def run_operation_files(filenames, params, params_general):
     if show_original:
         # before registration:
         logging.info('Plotting tiles...')
-        msims = [msi_utils.get_msim_from_sim(sim) for sim in sims]
         original_positions_filename = output + 'positions_original.pdf'
-        vis_utils.plot_positions(msims, transform_key=source_transform_key, use_positional_colors=False,
-                                 view_labels=file_indices, view_labels_size=3,
+        vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=source_transform_key,
+                                 use_positional_colors=False, view_labels=file_indices, view_labels_size=3,
                                  show_plot=verbose, output_filename=original_positions_filename)
 
         logging.info('Fusing original...')
@@ -743,8 +737,8 @@ def run_operation_files(filenames, params, params_general):
     # plot the tile configuration after registration
     logging.info('Plotting tiles...')
     registered_positions_filename = output + 'positions_registered.pdf'
-    vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=reg_transform_key, use_positional_colors=False,
-                             view_labels=file_indices, view_labels_size=3,
+    vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=reg_transform_key,
+                             use_positional_colors=False, view_labels=file_indices, view_labels_size=3,
                              show_plot=verbose, output_filename=registered_positions_filename)
 
     figure, axes = results['summary_plot']
