@@ -98,7 +98,15 @@ class MVSRegistration:
         sims = results['sims']
         mappings = results['mappings']
         mappings2 = {get_filetitle(filenames[index]): mapping.tolist() for index, mapping in mappings.items()}
-        metrics = f'Final residual: {results["final_residual"]:.3f} Confidence: {results["confidence"]:.3f}'
+
+        reg_result = results['reg_result']
+        pairwise_registration_results = reg_result['pairwise_registration']
+        groupwise_resolution_results = reg_result['groupwise_resolution']
+        residual_error = np.mean(list(groupwise_resolution_results['metrics']['residuals'].values()))
+        registration_quality = np.mean(list(pairwise_registration_results['metrics']['qualities'].values()))
+        metrics = (f'Residual error: {residual_error:.3f}'
+                   f' Registration quality: {registration_quality:.3f}'
+                   f' Confidence: {results["confidence"]:.3f}')
         logging.info(metrics)
 
         with open(output + 'mappings.json', 'w') as file:
@@ -140,10 +148,16 @@ class MVSRegistration:
                                  use_positional_colors=False, view_labels=file_indices, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
 
-        summary_plot = results.get('summary_plot')
+        summary_plot = pairwise_registration_results.get('summary_plot')
         if summary_plot is not None:
             figure, axes = summary_plot
-            summary_plot_filename = output + 'summary_plot.pdf'
+            summary_plot_filename = output + 'pairwise_registration.pdf'
+            figure.savefig(summary_plot_filename)
+
+        summary_plot = groupwise_resolution_results.get('summary_plot')
+        if summary_plot is not None:
+            figure, axes = summary_plot
+            summary_plot_filename = output + 'groupwise_resolution.pdf'
             figure.savefig(summary_plot_filename)
 
         if is_transition:
@@ -256,8 +270,7 @@ class MVSRegistration:
                 transform_key=self.source_transform_key,
                 c_coords=channel_labels
             )
-            sims.append(sim)
-
+            sims.append(sim.chunk({'y': 1024, 'x': 1024}))
         return sims, translations, rotations
 
     def register(self, sims, params):
@@ -404,7 +417,7 @@ class MVSRegistration:
                     post_registration_quality_threshold=0.1,
 
                     plot_summary=True,
-                    return_metrics=True
+                    return_dict=True
                 )
                 # copy transforms from register sims to unmodified sims
                 for reg_msim, index in zip(register_msims, indices):
@@ -414,17 +427,11 @@ class MVSRegistration:
                         transform_key=self.reg_transform_key)
 
                 mappings = reg_result['params']
-                metrics = reg_result['groupwise_resolution_metrics']
-                final_residual = list(metrics['mean_residual'])[-1]
-                summary_plot = reg_result['summary_plot']
-                #reg_result['pairwise_reg_graph']
-                #reg_result['groupwise_res_graph']
-
                 mappings_dict = {index: mapping.data[0] for index, mapping in zip(indices, mappings)}
                 distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
                              for mapping in mappings_dict.values()]
 
-                if len(sims) > 2:
+                if len(register_sims) > 2:
                     # Coefficient of variation
                     cvar = np.std(distances) / np.mean(distances)
                     confidence = 1 - min(cvar / 10, 1)
@@ -435,9 +442,7 @@ class MVSRegistration:
                 logging.warning('Not enough overlap')
                 mappings = [param_utils.identity_transform(ndim=ndims, t_coords=[0])] * len(sims)
                 mappings_dict = {index: np.eye(ndims + 1) for index, _ in enumerate(sims)}
-                final_residual = 0
                 confidence = 0
-                summary_plot = None
 
         if verbose:
             progress.update()
@@ -494,9 +499,8 @@ class MVSRegistration:
                 transform_key=self.reg_transform_key,
                 output_chunksize={'y': 1024, 'x': 1024},
             )
-        return {'mappings': mappings_dict,
-                'final_residual': final_residual,
+        return {'reg_result': reg_result,
+                'mappings': mappings_dict,
                 'confidence': confidence,
-                'summary_plot': summary_plot,
                 'sims': sims,
                 'fused_image': fused_image}

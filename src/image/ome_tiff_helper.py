@@ -102,22 +102,3 @@ def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], position
         if ome_channels:
             ome_metadata['Channel'] = ome_channels
     return ome_metadata, resolution, resolution_unit
-
-
-def retuple(chunks, shape):
-    # from ome-zarr-py
-    """
-    Expand chunks to match shape.
-
-    E.g. if chunks is (64, 64) and shape is (3, 4, 5, 1028, 1028)
-    return (3, 4, 5, 64, 64)
-
-    If chunks is an integer, it is applied to all dimensions, to match
-    the behaviour of zarr-python.
-    """
-
-    if isinstance(chunks, int):
-        return tuple([chunks] * len(shape))
-
-    dims_to_add = len(shape) - len(chunks)
-    return *shape[:dims_to_add], *chunks
