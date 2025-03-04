@@ -479,8 +479,8 @@ class MVSRegistration:
             output_stack_properties['shape']['z'] = len(sims)
             # fuse all sims together using simple average fusion
 
-            volume = np.prod(list(output_stack_properties['shape'].values()))
-            logging.info(f'Fusing {print_hbytes(volume)}')
+            data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
+            logging.info(f'Fusing {print_hbytes(data_size)}')
 
             # sims Z coords need to be correctly set!
             fused_image = fusion.fuse(
@@ -493,8 +493,8 @@ class MVSRegistration:
         elif is_channel_overlay:
             output_stack_properties = si_utils.get_stack_properties_from_sim(sim0)
 
-            volume = np.prod(list(output_stack_properties['shape'].values()))
-            logging.info(f'Fusing {print_hbytes(volume)}')
+            data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
+            logging.info(f'Fusing {print_hbytes(data_size)}')
 
             channel_sims = [fusion.fuse(
                 [sim],

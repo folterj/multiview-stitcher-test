@@ -357,8 +357,8 @@ def test_create_stack(path, n):
     # because it does not take into account the correct input z spacing because of stacks of one z plane
     output_stack_properties['shape']['z'] = len(sims)
 
-    volume = np.prod(list(output_stack_properties['shape'].values()))
-    print(f'Fusing {print_hbytes(volume)}')
+    data_size = np.prod(list(output_stack_properties['shape'].values())) * sims[0].dtype.itemsize
+    print(f'Fusing {print_hbytes(data_size)}')
 
     progress = tqdm(desc='Fuse', total=1)
     # fuse all sims together using simple average fusion
