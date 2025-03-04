@@ -1,11 +1,12 @@
 import cv2 as cv
 import numpy as np
+from spatial_image import SpatialImage
 
 from src.RegistrationMethod import RegistrationMethod
 
 
 class RegistrationMethodDummy(RegistrationMethod):
-    def registration(self, fixed_data, moving_data, **kwargs) -> dict:
+    def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:
         transform = cv.getRotationMatrix2D((fixed_data.shape[0] // 2, fixed_data.shape[1] // 2), 38, 1)
         transform = np.vstack([transform, [0, 0, 1]])
         transform[:, 2] += [300, 25, 0]

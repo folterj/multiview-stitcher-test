@@ -7,11 +7,9 @@ from src.image.ome_zarr_util import create_axes_metadata, create_transformation_
 
 
 def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, translation, rotation,
-                  tile_size=(256, 256), compression=None,
-                  scaler=None, zarr_version=2, ome_version='0.4'):
+                  compression=None, scaler=None, zarr_version=2, ome_version='0.4'):
 
-    storage_options = {'dimension_separator': '/', 'chunks': tile_size}
-
+    storage_options = {'dimension_separator': '/'}
     compressor, compression_filters = create_compression_filter(compression)
     if compressor is not None:
         storage_options['compressor'] = compressor

@@ -2,6 +2,7 @@ import cv2 as cv
 import logging
 import numpy as np
 from sklearn.neighbors import KDTree
+from spatial_image import SpatialImage
 
 from src.RegistrationMethod import RegistrationMethod
 
@@ -12,6 +13,7 @@ class RegistrationMethodFeatures(RegistrationMethod):
         self.feature_model = cv.ORB_create()
 
     def detect_features(self, data):
+        data = data.astype(self.source_type)
         kp, desc = self.feature_model.detectAndCompute(data, None)
         points = [kp1.pt for kp1 in kp]
         if len(points) >= 2:
@@ -24,7 +26,7 @@ class RegistrationMethodFeatures(RegistrationMethod):
         # show_image(image)
         return points, desc, nn_distance
 
-    def registration(self, fixed_data, moving_data, **kwargs) -> dict:
+    def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:
         fixed_points, fixed_desc, nn_distance1 = self.detect_features(fixed_data.data)
         moving_points, moving_desc, nn_distance2 = self.detect_features(moving_data.data)
         nn_distance = np.mean([nn_distance1, nn_distance2])

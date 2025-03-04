@@ -1,14 +1,13 @@
-import dask.array as da
 from multiview_stitcher import fusion, registration, vis_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import traceback
 import xarray as xr
 from tqdm import tqdm
 
 from src.image.ome_helper import save_image
+from src.image.source_helper import create_source
 from src.image.util import *
 
 
@@ -44,17 +43,17 @@ def redimension_data(data, old_order, new_order, **indices):
 
 
 def calc_shape(y, x, offset):
-    #y, x = args
     h, w = y.shape
     xoffset, yoffset = offset
     image = (1 + np.cos((xoffset + x / w) * 2 * np.pi)
              * np.cos((yoffset + y / h) * 2 * np.pi)) / 2
+    image[image < 0.01] = 1
     return image
 
 
-def test_init_tiles_simple(ntiles=2, size=(1024, 1024), chunks=(256, 256), dimension_order0='yx'):
-    pixel_size = [0.1, 0.1]
+def init_tiles_pattern(n=2, size=(1024, 1024), chunks=(256, 256), dimension_order0='yx', transform_key='stage_metadata'):
     z_scale = 0.5
+    pixel_size = [0.1, 0.1, z_scale]
     dtype = np.dtype(np.uint16)
 
     dimension_order = dimension_order0
@@ -68,32 +67,39 @@ def test_init_tiles_simple(ntiles=2, size=(1024, 1024), chunks=(256, 256), dimen
     z_position = 0
     offset = [0, 0]
     sims = []
-    for _ in tqdm(range(ntiles), desc='Init tiles'):
+    for _ in tqdm(range(n), desc='Init tiles'):
         position = list(np.random.rand(2)) + [z_position]
-        z_position += z_scale
         shape_image = np.fromfunction(calc_shape, tuple(size), dtype=np.float32, offset=offset)
         noise_image = np.random.random_sample(size)
         pattern_image = float2int_image(
             np.clip(0.9 * shape_image + 0.1 * noise_image, 0, 1),
             target_dtype=dtype)
         pattern_image = redimension_data(pattern_image, dimension_order0, dimension_order)
-        scale_dict = convert_xyz_to_dict(pixel_size)
-        if len(scale_dict) > 0 and 'z' not in scale_dict:
-            scale_dict['z'] = 1
-        translation_dict = convert_xyz_to_dict(position)
-        if len(translation_dict) > 0 and 'z' not in translation_dict:
-            translation_dict['z'] = 0
         sim = si_utils.get_sim_from_array(
             pattern_image,
             dims=list(dimension_order),
-            scale=scale_dict,
-            translation=translation_dict,
-            transform_key='stage_metadata'
+            scale=convert_xyz_to_dict(pixel_size),
+            translation=convert_xyz_to_dict(position),
+            transform_key=transform_key
         )
         sims.append(sim.chunk(chunks))
+        z_position += z_scale
         offset[0] += 0.05
         offset[1] -= 0.01
     return sims
+
+
+def init_sim(data, chunks=(1024, 1024), dimension_order='yx', position=None, pixel_size=None, transform_key='stage_metadata'):
+    if not isinstance(chunks, dict):
+        chunks = convert_xyz_to_dict(chunks)
+    sim = si_utils.get_sim_from_array(
+        data,
+        dims=list(dimension_order),
+        scale=convert_xyz_to_dict(pixel_size),
+        translation=convert_xyz_to_dict(position),
+        transform_key=transform_key
+    )
+    return sim.chunk(chunks)
 
 
 def test(sims, tmp_path):
@@ -198,9 +204,12 @@ def test4(sims, tmp_path):
 
 
 def test5(sims, tmp_path):
-
     transform_key = 'stage_metadata'
     new_transform_key = 'registered'
+
+    from src.RegistrationMethodCPD import RegistrationMethodCPD
+    registration_method = RegistrationMethodCPD(sims[0].dtype)
+    pairwise_reg_func = registration_method.registration
 
     # register in 2D
     # pairs: pairwise consecutive views
@@ -213,9 +222,11 @@ def test5(sims, tmp_path):
         transform_key=transform_key,
         new_transform_key=new_transform_key,
         pairs = [(i, i+1) for i in range(len(sims)-1)],
+        pairwise_reg_func=pairwise_reg_func
     )
     progress.update()
     progress.close()
+    print(params)
 
     # set 3D affine transforms from 2D registration params
     for index, sim in enumerate(sims):
@@ -277,18 +288,102 @@ def test5(sims, tmp_path):
     progress.close()
 
 
-def test_pipeline(tmp_path, ntiles=2):
-    #sims, translations, rotations = test_init_tiles(tmp_path, ntiles)
+def test_pipeline(tmp_path, n=2):
     size = (1000, 1000)
     chunks = (1024, 1024)
     print('size:', size)
     print('chunks:', chunks)
-    sims = test_init_tiles_simple(ntiles, size=size, chunks=chunks)
+    sims = init_tiles_pattern(n, size=size, chunks=chunks)
     test5(sims, tmp_path)
-    print(tmp_path)
-    pass
+
+
+def create_stack(path, n=100):
+    dtype = np.dtype(np.uint16)
+    size = (10000, 10000)
+    chunks = (1024, 1024)
+    z_scale = 0.5
+    pixel_size = [0.1, 0.1, z_scale]
+    dimension_order0 = 'yx'
+    dimension_order = 'zyx'
+    transform_key = 'stage_metadata'
+
+    noise_image = float2int_image(np.random.random_sample(size), target_dtype=dtype)
+    data = redimension_data(noise_image, dimension_order0, dimension_order)
+
+    z = 0
+    for index in tqdm(range(n), desc='Creating tiles'):
+        filename = str(path / f'image{index:04}')
+        sim = init_sim(data, chunks=chunks, dimension_order='zyx', pixel_size=pixel_size, position=[0, 0, z], transform_key = 'stage_metadata')
+        save_image(filename, sim, transform_key=transform_key, params={'format': 'zar'})
+        z += z_scale
+
+
+def test_create_stack(path, n):
+    transform_key = 'stage_metadata'
+    z_scale = 0.5
+
+    sims = []
+    for index in tqdm(range(n), desc='Init tiles'):
+        filename = str(path / f'image{index:04}')
+        source = create_source(filename + '.ome.zarr')
+        dimension_order = source.dimension_order
+        sim = si_utils.get_sim_from_array(
+            source.get_source_dask()[0],
+            dims=list(dimension_order),
+            scale=convert_xyz_to_dict(source.get_pixel_size_micrometer()),
+            translation=convert_xyz_to_dict(source.get_position_micrometer()),
+            transform_key=transform_key
+        )
+        sims.append(sim)
+
+    # set output spacing
+    output_spacing = si_utils.get_spacing_from_sim(sims[0]) | {'z': z_scale}
+
+    # calculate output stack properties from input views
+    output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+        [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+        [np.array(si_utils.get_affine_from_sim(sim, transform_key).squeeze()) for sim in sims],
+        output_spacing,
+        mode='union',
+    )
+
+    # convert to dict form
+    output_stack_properties = {
+        k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+        for k, v in output_stack_properties.items()
+    }
+
+    # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
+    # because it does not take into account the correct input z spacing because of stacks of one z plane
+    output_stack_properties['shape']['z'] = len(sims)
+
+    volume = np.prod(list(output_stack_properties['shape'].values()))
+    print(f'Fusing {print_hbytes(volume)}')
+
+    progress = tqdm(desc='Fuse', total=1)
+    # fuse all sims together using simple average fusion
+    fused_image = fusion.fuse(
+        sims,
+        transform_key=transform_key,
+        output_stack_properties=output_stack_properties,
+        output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
+        fusion_func=fusion.simple_average_fusion,
+    )
+    progress.update()
+    progress.close()
+
+    progress = tqdm(desc='Save zarr', total=1)
+    save_image(path / 'fused', fused_image, transform_key=transform_key, params={'format': 'zar'})
+    progress.update()
+    progress.close()
+
 
 
 if __name__ == '__main__':
     with TemporaryDirectory() as temp_dir:
-        test_pipeline(Path(temp_dir))
+        path = Path(temp_dir)
+
+        path = Path('D:/slides/test_stack/')
+        #create_stack(path, n=100)
+        test_create_stack(path, n=100)
+        #test_pipeline(path)

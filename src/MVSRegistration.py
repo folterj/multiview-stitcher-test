@@ -49,7 +49,12 @@ class MVSRegistration:
         output_params = self.params_general.get('output', {})
         clear = output_params.get('clear', False)
 
-        file_indices = ['-'.join(map(str, find_all_numbers(get_filetitle(filename))[-2:])) for filename in filenames]
+        file_labels = []
+        for filename in filenames:
+            file_label = '-'.join(map(str, find_all_numbers(filename)[-2:]))
+            if file_label == '':
+                file_label = get_filetitle(filename)
+            file_labels.append(file_label)
 
         if len(filenames) == 0:
             logging.warning('Skipping (no tiles)')
@@ -65,7 +70,6 @@ class MVSRegistration:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        logging.info('Initialising tiles...')
         sims, positions, rotations = self.init_tiles(filenames, params)
 
         registered_fused_filename = output + 'registered'
@@ -80,7 +84,7 @@ class MVSRegistration:
             logging.info('Plotting tiles...')
             original_positions_filename = output + 'positions_original.pdf'
             vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.source_transform_key,
-                                     use_positional_colors=False, view_labels=file_indices, view_labels_size=3,
+                                     use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                      show_plot=self.verbose, output_filename=original_positions_filename)
 
             logging.info('Fusing original...')
@@ -94,10 +98,11 @@ class MVSRegistration:
                        params=output_params)
 
         results = self.register(sims, params)
+
         fused_image = results['fused_image']
         sims = results['sims']
         mappings = results['mappings']
-        mappings2 = {get_filetitle(filenames[index]): mapping.tolist() for index, mapping in mappings.items()}
+        mappings2 = {file_labels[index]: mapping.tolist() for index, mapping in mappings.items()}
 
         reg_result = results['reg_result']
         pairwise_registration_results = reg_result['pairwise_registration']
@@ -112,6 +117,10 @@ class MVSRegistration:
         with open(output + 'mappings.json', 'w') as file:
             json.dump(mappings2, file, indent=4)
 
+        if self.verbose:
+            print('Mappings:')
+            print(mappings2)
+
         with open(output + 'mappings.csv', 'w', newline='') as file:
             csvwriter = csv.writer(file)
             header = ['Tile', 'x', 'y', 'z', 'rotation']
@@ -124,17 +133,13 @@ class MVSRegistration:
                     rotation = None
                 position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
                                                       transform=mapping, translation0=position, rotation=rotation)
-                row = [get_filetitle(filenames[index])] + list(position) + [rotation]
+                row = [file_labels[index]] + list(position) + [rotation]
                 csvwriter.writerow(row)
                 if self.verbose:
                     print(row)
 
         with open(output + 'metrics.txt', 'w') as file:
             file.write(metrics)
-
-        if self.verbose:
-            print('Mappings:')
-            print(mappings2)
 
         logging.info('Saving fused image...')
         save_image(registered_fused_filename, fused_image,
@@ -145,7 +150,7 @@ class MVSRegistration:
         logging.info('Plotting tiles...')
         registered_positions_filename = output + 'positions_registered.pdf'
         vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.reg_transform_key,
-                                 use_positional_colors=False, view_labels=file_indices, view_labels_size=3,
+                                 use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
 
         summary_plot = pairwise_registration_results.get('summary_plot')
@@ -216,7 +221,7 @@ class MVSRegistration:
 
         last_z_position = None
         different_z_positions = False
-        for source in tqdm(sources, disable=not self.verbose):
+        for source in tqdm(sources, disable=not self.verbose, desc='Initialising tiles'):
             if reset_coordinates or len(source.get_position()) == 0:
                 translation = np.zeros(3)
             else:
@@ -448,7 +453,6 @@ class MVSRegistration:
             progress.update()
             progress.close()
 
-        logging.info('Fusing...')
         # convert to multichannel images
         if is_stack:
             # set 3D affine transforms from 2D registration params
@@ -475,6 +479,9 @@ class MVSRegistration:
             output_stack_properties['shape']['z'] = len(sims)
             # fuse all sims together using simple average fusion
 
+            volume = np.prod(list(output_stack_properties['shape'].values()))
+            logging.info(f'Fusing {print_hbytes(volume)}')
+
             # sims Z coords need to be correctly set!
             fused_image = fusion.fuse(
                 sims,
@@ -485,6 +492,10 @@ class MVSRegistration:
             )
         elif is_channel_overlay:
             output_stack_properties = si_utils.get_stack_properties_from_sim(sim0)
+
+            volume = np.prod(list(output_stack_properties['shape'].values()))
+            logging.info(f'Fusing {print_hbytes(volume)}')
+
             channel_sims = [fusion.fuse(
                 [sim],
                 transform_key=self.reg_transform_key,
@@ -494,6 +505,7 @@ class MVSRegistration:
             channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
             fused_image = xr.combine_nested([sim.rename() for sim in channel_sims], concat_dim='c', combine_attrs='override')
         else:
+            logging.info('Fusing...')
             fused_image = fusion.fuse(
                 sims,
                 transform_key=self.reg_transform_key,
