@@ -1,11 +1,21 @@
-from tifffile import TiffWriter
+from tifffile import TiffWriter, tifffile
 
 from src.image.color_conversion import rgba_to_int
 from src.util import *
 
 
+def load_tiff(filename):
+    return tifffile.imread(filename)
+
+
+def save_tiff(filename, data, dimension_order=None, pixel_size=None, tile_size=(1024, 1024), compression='LZW'):
+    _, resolution, resolution_unit = create_tiff_metadata(pixel_size, dimension_order)
+    tifffile.imwrite(filename, data, tile=tile_size, compression=compression,
+                     resolution=resolution, resolutionunit=resolution_unit)
+
+
 def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], positions=[], rotation=None,
-                  tile_size=(1024, 1024), compression='LZW', scaler=None):
+                  tile_size=None, compression=None, scaler=None):
 
     ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, dimension_order,
                                                                        channels, positions, rotation, is_ome=True)
@@ -14,14 +24,6 @@ def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], posi
         npyramid_add = scaler.max_layer
     else:
         npyramid_add = 0
-
-    use_chunking = (tile_size is not None)
-    if use_chunking:
-        chunking0 = tuple(reversed(tile_size))
-        chunking = tuple(reversed(tile_size))
-    else:
-        chunking0 = None
-        chunking = (1024, 1024)
 
     with TiffWriter(filename) as writer:
         for i in range(npyramid_add + 1):
@@ -38,12 +40,9 @@ def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], posi
                 resolution = None
                 resolutionunit = None
                 data = scaler.resize_image(data)
-            if use_chunking or (data.chunksize == data.shape and
-                                chunking[-1] < data.chunksize[-1] and chunking[-2] < data.chunksize[-2]):
-                chunking = retuple(chunking, data.shape)
-                data = data.rechunk(chunks=chunking)
+                data.rechunk()
             writer.write(data, subifds=subifds, subfiletype=subfiletype,
-                         tile=chunking0, compression=compression,
+                         tile=tile_size, compression=compression,
                          resolution=resolution, resolutionunit=resolutionunit, metadata=metadata)
 
 
@@ -54,7 +53,7 @@ def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], position
     pixel_size_um = None
 
     if pixel_size is not None:
-        pixel_size_um = get_value_units_micrometer(pixel_size)
+        pixel_size_um = get_value_units_micrometer(pixel_size)[:2]
         resolution_unit = 'CENTIMETER'
         resolution = [1e4 / size for size in pixel_size_um]
 
@@ -92,22 +91,3 @@ def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], position
         if ome_channels:
             ome_metadata['Channel'] = ome_channels
     return ome_metadata, resolution, resolution_unit
-
-
-def retuple(chunks, shape):
-    # from ome-zarr-py
-    """
-    Expand chunks to match shape.
-
-    E.g. if chunks is (64, 64) and shape is (3, 4, 5, 1028, 1028)
-    return (3, 4, 5, 64, 64)
-
-    If chunks is an integer, it is applied to all dimensions, to match
-    the behaviour of zarr-python.
-    """
-
-    if isinstance(chunks, int):
-        return tuple([chunks] * len(shape))
-
-    dims_to_add = len(shape) - len(chunks)
-    return *shape[:dims_to_add], *chunks

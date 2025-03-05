@@ -2,10 +2,11 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
+  show_filtered: False
   break_on_error: True
   verbose: True
   output:
-    format: ome.zarr
+    format: ome.tiff, ome.zarr
     tile_size: []
     compression: []
     npyramid_add: 4
@@ -13,11 +14,13 @@ general:
 
 operations:
   - operation: register
-    input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection2/.*.ome.tif
-    flatfield_quantile: 0.95
+    #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tiff
+    #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection3/*.ome.tiff
+    input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/*.ome.tiff
+    #flatfield_quantile: 0.95
     invert_x_coordinates: True
     #filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: D:/slides/EM04768_01_substrate_04/registered/reflection_stitched/
+    output: D:/slides/EM04768_01_substrate_04/registered/reflection_stitched3/

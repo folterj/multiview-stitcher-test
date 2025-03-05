@@ -5,6 +5,10 @@ from scipy.ndimage import gaussian_filter
 from skimage.transform import downscale_local_mean
 from tifffile import TiffFile
 
+from multiscale_spatial_image import MultiscaleSpatialImage
+from multiview_stitcher import msi_utils, param_utils, fusion
+from multiview_stitcher import spatial_image_utils as si_utils
+
 
 try:
     import matplotlib as mpl
@@ -27,6 +31,24 @@ def show_image_gray(image: np.ndarray):
     plt.show()
 
 
+def grayscale_image(image):
+    nchannels = image.shape[2] if len(image.shape) > 2 else 1
+    if nchannels == 4:
+        return cv.cvtColor(image, cv.COLOR_RGBA2GRAY)
+    elif nchannels > 1:
+        return cv.cvtColor(image, cv.COLOR_RGB2GRAY)
+    else:
+        return image
+
+
+def color_image(image):
+    nchannels = image.shape[2] if len(image.shape) > 2 else 1
+    if nchannels == 1:
+        return cv.cvtColor(image, cv.COLOR_GRAY2RGB)
+    else:
+        return image
+
+
 def int2float_image(image):
     source_dtype = image.dtype
     if not source_dtype.kind == 'f':
@@ -43,6 +65,16 @@ def float2int_image(image, target_dtype=np.dtype(np.uint8)):
         return (image * maxval).astype(target_dtype)
     else:
         return image
+
+
+def uint8_image(image):
+    source_dtype = image.dtype
+    if source_dtype.kind == 'f':
+        image = image * 255
+    elif source_dtype.itemsize != 1:
+        factor = 2 ** (8 * (source_dtype.itemsize - 1))
+        image = image // factor
+    return image.astype(np.uint8)
 
 
 def ensure_unsigned_type(dtype: np.dtype) -> np.dtype:
@@ -119,39 +151,6 @@ def get_numpy_slicing(dimension_order, **slicing):
     return tuple(slices)
 
 
-def get_image_quantile(image: np.ndarray, quantile: float, axis=None) -> float:
-    value = np.quantile(image, quantile, axis=axis).astype(image.dtype)
-    return value
-
-
-def normalise_values(image: np.ndarray, min_value: float, max_value: float) -> np.ndarray:
-    return np.clip((image.astype(np.float32) - min_value) / (max_value - min_value), 0, 1)
-
-
-def norm_image_variance(image0):
-    if len(image0.shape) == 3 and image0.shape[2] == 4:
-        image, alpha = image0[..., :3], image0[..., 3]
-    else:
-        image, alpha = image0, None
-    normimage = np.clip((image - np.mean(image)) / np.std(image), 0, 1).astype(np.float32)
-    if alpha is not None:
-        normimage = np.dstack([normimage, alpha])
-    return normimage
-
-
-def norm_image_quantiles(image0, quantile=0.99):
-    if len(image0.shape) == 3 and image0.shape[2] == 4:
-        image, alpha = image0[..., :3], image0[..., 3]
-    else:
-        image, alpha = image0, None
-    min_value = np.quantile(image, 1 - quantile)
-    max_value = np.quantile(image, quantile)
-    normimage = np.clip((image - min_value) / (max_value - min_value), 0, 1).astype(np.float32)
-    if alpha is not None:
-        normimage = np.dstack([normimage, alpha])
-    return normimage
-
-
 def get_image_size_info(sizes_xyzct: list, pixel_nbytes: int, pixel_type: np.dtype, channels: list) -> str:
     image_size_info = 'XYZCT:'
     size = 0
@@ -215,10 +214,10 @@ def image_reshape(image: np.ndarray, target_size: tuple) -> np.ndarray:
     if sw < tw or sh < th:
         dw = max(tw - sw, 0)
         dh = max(th - sh, 0)
-        padding = [(0, dh), (0, dw)]
+        padding = [(dh // 2, dh - dh //  2), (dw // 2, dw - dw // 2)]
         if len(image.shape) == 3:
             padding += [(0, 0)]
-        image = np.pad(image, padding, 'edge')
+        image = np.pad(image, padding, mode='constant', constant_values=(0, 0))
     if tw < sw or th < sh:
         image = image[0:th, 0:tw]
     return image
@@ -492,25 +491,56 @@ def calc_images_quantiles(images, quantiles):
     return quantile_images
 
 
-def create_normalisation_images(images, quantiles, nchannels=1):
+def get_image_quantile(image: np.ndarray, quantile: float, axis=None) -> float:
+    value = np.quantile(image, quantile, axis=axis).astype(image.dtype)
+    return value
+
+
+def get_image_window(image, low=0.01, high=0.99):
+    window = (
+        get_image_quantile(image, low),
+        get_image_quantile(image, high)
+    )
+    return window
+
+
+def normalise_values(image: np.ndarray, min_value: float, max_value: float) -> np.ndarray:
+    return np.clip((image.astype(np.float32) - min_value) / (max_value - min_value), 0, 1)
+
+
+def norm_image_variance(image0):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    normimage = np.clip((image - np.mean(image)) / np.std(image), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
+
+
+def norm_image_quantiles(image0, quantile=0.99):
+    if len(image0.shape) == 3 and image0.shape[2] == 4:
+        image, alpha = image0[..., :3], image0[..., 3]
+    else:
+        image, alpha = image0, None
+    min_value = np.quantile(image, 1 - quantile)
+    max_value = np.quantile(image, quantile)
+    normimage = np.clip((image - min_value) / (max_value - min_value), 0, 1).astype(np.float32)
+    if alpha is not None:
+        normimage = np.dstack([normimage, alpha])
+    return normimage
+
+
+def create_quantile_images(sims, quantiles):
+    quantile_images = []
     channel_images2 = []
+    nchannels = sims[0].sizes.get('c', 1)
     for channeli in range(nchannels):
-        if nchannels > 1:
-            channel_images = [image[..., channeli] for image in images]
-        else:
-            channel_images = images
-        # Filter tiles with signal
-        median_image = calc_images_median(channel_images)
-        difs = [np.mean(np.abs(image.astype(np.float32) - median_image.astype(np.float32)), (0, 1)) for image in images]
-        threshold = np.mean(difs, 0)
-        #threshold, _ = cv.threshold(np.array(difs).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
-        #threshold, foregrounds = filter_noise_images(channel_images)
-        #back_images = [image for image, foreground in zip(images, foregrounds) if not foreground]
-        back_images = [image for image, dif in zip(images, difs) if np.all(dif < threshold)]
-        norm_images = calc_images_quantiles(back_images, quantiles)
+        channel_images = [sim.isel({'c': 0}).squeeze() for sim in sims]
+        norm_images = calc_images_quantiles(channel_images, quantiles)
         channel_images2.append(norm_images)
 
-    quantile_images = []
     for quantilei in range(len(quantiles)):
         quantile_image = None
         for channel_image in channel_images2:
@@ -521,16 +551,6 @@ def create_normalisation_images(images, quantiles, nchannels=1):
                 quantile_image = cv.merge(list(cv.split(quantile_image)) + [image])
         quantile_images.append(quantile_image)
     return quantile_images
-
-
-def flatfield_correction(image0, dark=0, bright=1, clip=True):
-    # Input/output: float images
-    # https://en.wikipedia.org/wiki/Flat-field_correction
-    mean_bright_dark = np.mean(bright - dark, (0, 1))
-    image = (image0 - dark) * mean_bright_dark / (bright - dark)
-    if clip:
-        image = np.clip(image, 0, 1)
-    return image
 
 
 def get_max_downsamples(shape, npyramid_add, pyramid_downsample):
@@ -557,7 +577,7 @@ def detect_area_points(image):
     threshold = -5
     contours = []
     while len(contours) <= 1 and threshold <= 255:
-        _, binimage = cv.threshold(image, threshold, 255, method)
+        _, binimage = cv.threshold(uint8_image(image), threshold, 255, method)
         contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
         contours = contours0[0] if len(contours0) == 2 else contours0[1]
         method = cv.THRESH_BINARY
@@ -575,5 +595,122 @@ def detect_area_points(image):
     return area_points
 
 
-def points_to_3d(points):
-    return [list(point) + [0] for point in points]
+def calc_foreground_map(sims):
+    if len(sims) <= 2:
+        return [True] * len(sims)
+    sims = [sim.squeeze().astype(np.float32) for sim in sims]
+    median_image = calc_images_median(sims).astype(np.float32)
+    difs = [np.mean(np.abs(sim - median_image), (0, 1)) for sim in sims]
+    # or use stddev instead of mean?
+    threshold = np.mean(difs, 0)
+    #threshold, _ = cv.threshold(np.array(difs).astype(np.uint16), 0, 1, cv.THRESH_OTSU)
+    #threshold, foregrounds = filter_noise_images(channel_images)
+    map = (difs > threshold)
+    if np.all(map == False):
+        return [True] * len(sims)
+    return map
+
+
+def normalise(sims, transform_key, use_global=True):
+    new_sims = []
+    dtype = sims[0].dtype
+    # global mean and stddev
+    if use_global:
+        mins = []
+        ranges = []
+        for sim in sims:
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
+            #min, max = get_image_window(sim, low=0.01, high=0.99)
+            #range = max - min
+            mins.append(min)
+            ranges.append(range)
+        min = np.mean(mins)
+        range = np.mean(ranges)
+    else:
+        min = 0
+        range = 1
+    # normalise all images
+    for sim in sims:
+        if not use_global:
+            min = np.mean(sim, dtype=np.float32)
+            range = np.std(sim, dtype=np.float32)
+        image = float2int_image(np.clip((sim - min) / range, 0, 1), dtype)
+        new_sim = si_utils.get_sim_from_array(
+            image,
+            dims=sim.dims,
+            scale=si_utils.get_spacing_from_sim(sim),
+            translation=si_utils.get_origin_from_sim(sim),
+            transform_key=transform_key,
+            affine=si_utils.get_affine_from_sim(sim, transform_key),
+            c_coords=sim.c
+        )
+        new_sims.append(new_sim)
+    return new_sims
+
+
+def calc_output_properties(sims, transform_key, z_scale=None):
+    output_spacing = si_utils.get_spacing_from_sim(sims[0])
+    if z_scale is not None:
+        output_spacing['z'] = z_scale
+    # calculate output stack properties from input views
+    output_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+        [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+        [np.array(si_utils.get_affine_from_sim(sim, transform_key).squeeze()) for sim in sims],
+        output_spacing,
+        mode='union',
+    )
+    # convert to dict form (this should not be needed anymore in the next release)
+    output_properties = {
+        k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+        for k, v in output_properties.items()
+    }
+    return output_properties
+
+
+def get_translation_rotation_from_transform(transform, invert=False):
+    if len(transform.shape) == 3:
+        transform = transform[0]
+    if invert:
+        transform = param_utils.invert_coordinate_order(transform)
+    transform = np.array(transform)
+    translation = param_utils.translation_from_affine(transform)
+    if len(translation) == 2:
+        translation = list(translation) + [0]
+    rotation = get_rotation_from_transform(transform)
+    return translation, rotation
+
+
+def get_data_mapping(data, transform_key=None, transform=None, translation0=None, rotation=None):
+    if rotation is None:
+        rotation = 0
+
+    if isinstance(data, MultiscaleSpatialImage):
+        sim = msi_utils.get_sim_from_msim(data)
+    else:
+        sim = data
+    sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
+    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
+    origin = si_utils.get_origin_from_sim(sim)
+    translation = [origin[sdim] for sdim in sdims]
+
+    if len(translation) == 0:
+        translation = [0, 0]
+    if len(translation) == 2:
+        if translation0 is not None and len (translation0) == 3:
+            z = translation0[2]
+        else:
+            z = 0
+        translation = list(translation) + [z]
+
+    if transform is not None:
+        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+        translation = np.array(translation) + translation1
+        rotation += rotation1
+
+    if transform_key is not None:
+        transform1 = sim.transforms[transform_key]
+        translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
+        rotation += rotation1
+
+    return translation, rotation

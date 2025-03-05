@@ -2,11 +2,12 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
+  show_filtered: False
   break_on_error: False
-  verbose: False
+  verbose: True
   output:
     clear: True
-    format: ome.zarr
+    format: ome.zarr, ome.tiff
     tile_size: []
     compression: []
     npyramid_add: 4
@@ -19,5 +20,5 @@ operations:
     normalisation: True
     use_rotation: True
     method: cpd
-    extra_metadata: {'scale': {'z': 0.01}}
+    extra_metadata: {'scale': {'z': 0.05}}
     output: aligned/

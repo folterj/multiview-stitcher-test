@@ -1,9 +1,7 @@
 import ast
 import cv2 as cv
 import glob
-from multiscale_spatial_image import MultiscaleSpatialImage
-from multiview_stitcher import msi_utils, param_utils
-from multiview_stitcher import spatial_image_utils as si_utils
+import math
 import numpy as np
 import os
 import re
@@ -286,52 +284,77 @@ def get_rotation_from_transform(transform):
     return rotation
 
 
+def points_to_3d(points):
+    return [list(point) + [0] for point in points]
+
+
 def convert_xyz_to_dict(xyz, axes='xyz'):
     dct = {dim: value for dim, value in zip(axes, xyz)}
     return dct
 
 
-def get_translation_rotation_from_transform(transform, invert=False):
-    if len(transform.shape) == 3:
-        transform = transform[0]
-    if invert:
-        transform = param_utils.invert_coordinate_order(transform)
-    transform = np.array(transform)
-    translation = param_utils.translation_from_affine(transform)
-    if len(translation) == 2:
-        translation = list(translation) + [0]
-    rotation = get_rotation_from_transform(transform)
-    return translation, rotation
-
-
-def get_data_mapping(data, transform_key=None, transform=None, translation0=None, rotation=None):
-    if rotation is None:
-        rotation = 0
-
-    if isinstance(data, MultiscaleSpatialImage):
-        sim = msi_utils.get_sim_from_msim(data)
+def normalise_rotated_positions(positions0, rotations0, size):
+    # in [xy(z)]
+    positions = []
+    rotations = []
+    positions_centre = np.mean(positions0, 0)
+    center_index = np.argmin([math.dist(position, positions_centre) for position in positions0])
+    center_position = positions0[center_index]
+    pairs, angles = get_orthogonal_pairs_from_tiles(positions0, size)
+    if len(pairs) > 0:
+        mean_angle = np.mean(angles)
+        for position0, rotation in zip(positions0, rotations0):
+            if rotation is None:
+                rotation = -mean_angle
+            transform = create_transform(center=center_position, angle=-rotation)
+            position = apply_transform([position0], transform)[0]
+            positions.append(position)
+            rotations.append(rotation)
     else:
-        sim = data
-    sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
-    sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
-    origin = si_utils.get_origin_from_sim(sim)
-    translation = [origin[sdim] for sdim in sdims]
+        positions = positions0
+        rotations = rotations0
+    return positions, rotations
 
-    if len(translation) == 2:
-        if translation0 is not None and len (translation0) == 3:
-            z = translation0[2]
-        else:
-            z = 0
-        translation = list(translation) + [z]
 
-    if transform is not None:
-        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
-        translation = np.array(translation) + translation1
-        rotation += rotation1
+def get_orthogonal_pairs_from_tiles(origins, image_size_um):
+    """
+    Get pairs of orthogonal neighbors from a list of tiles.
+    Tiles don't have to be placed on a regular grid.
+    """
+    pairs = []
+    angles = []
+    for i, j in np.transpose(np.triu_indices(len(origins), 1)):
+        origini = origins[i]
+        originj = origins[j]
+        distance = math.dist(origini, originj)
+        if distance < max(image_size_um):
+            pairs.append((i, j))
+            vector = origini - originj
+            angle = math.degrees(math.atan2(vector[1], vector[0]))
+            if distance < min(image_size_um):
+                angle += 90
+            while angle < -90:
+                angle += 180
+            while angle > 90:
+                angle -= 180
+            angles.append(angle)
+    return pairs, angles
 
-    if transform_key is not None:
-        transform1 = sim.transforms[transform_key]
-        translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
-        rotation += rotation1
 
-    return translation, rotation
+def retuple(chunks, shape):
+    # from ome-zarr-py
+    """
+    Expand chunks to match shape.
+
+    E.g. if chunks is (64, 64) and shape is (3, 4, 5, 1028, 1028)
+    return (3, 4, 5, 64, 64)
+
+    If chunks is an integer, it is applied to all dimensions, to match
+    the behaviour of zarr-python.
+    """
+
+    if isinstance(chunks, int):
+        return tuple([chunks] * len(shape))
+
+    dims_to_add = len(shape) - len(chunks)
+    return *shape[:dims_to_add], *chunks
