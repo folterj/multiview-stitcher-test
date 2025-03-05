@@ -14,9 +14,9 @@ general:
 operations:
   - operation: register
     input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/*.ome.tiff
-    flatfield_quantile: 0.95
+    #flatfield_quantile: 0.95
     invert_x_coordinates: True
-    filter_foreground: True
+    #filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
@@ -24,9 +24,9 @@ operations:
 
   - operation: register
     input: D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/*.ome.tiff
-    flatfield_quantile: 0.95
+    #flatfield_quantile: 0.95
     invert_x_coordinates: True
-    filter_foreground: True
+    #filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation

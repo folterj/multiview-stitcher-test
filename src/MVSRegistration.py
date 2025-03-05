@@ -30,6 +30,7 @@ class MVSRegistration:
     def __init__(self, params_general):
         self.params_general = params_general
         self.verbose = self.params_general.get('verbose', False)
+        self.verbose_mvs = self.params_general.get('verbose_mvs', False)
 
         self.source_transform_key = 'stage_metadata'
         self.reg_transform_key = 'registered'
@@ -105,10 +106,10 @@ class MVSRegistration:
         mappings2 = {file_labels[index]: mapping.tolist() for index, mapping in mappings.items()}
 
         reg_result = results['reg_result']
-        pairwise_registration_results = reg_result['pairwise_registration']
-        groupwise_resolution_results = reg_result['groupwise_resolution']
-        residual_error = np.mean(list(groupwise_resolution_results['metrics']['residuals'].values()))
-        registration_quality = np.mean(list(pairwise_registration_results['metrics']['qualities'].values()))
+        pairwise_registration_results = reg_result.get('pairwise_registration', {})
+        groupwise_resolution_results = reg_result.get('groupwise_resolution', {})
+        registration_quality = np.mean(list(pairwise_registration_results.get('metrics', {}).get('qualities', {}).values()))
+        residual_error = np.mean(list(groupwise_resolution_results.get('metrics', {}).get('residuals', {}).values()))
         metrics = (f'Residual error: {residual_error:.3f}'
                    f' Registration quality: {registration_quality:.3f}'
                    f' Confidence: {results["confidence"]:.3f}')
@@ -299,7 +300,6 @@ class MVSRegistration:
         use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
         use_rotation = params.get('use_rotation', False)
         show_filtered = self.params_general.get('show_filtered', False)
-        verbose = self.params_general.get('verbose', False)
 
         extra_metadata = params.get('extra_metadata', {})
         channels = extra_metadata.get('channels', [])
@@ -344,17 +344,13 @@ class MVSRegistration:
                 filtered_filename = params['output'] + 'filtered.pdf'
                 vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in register_sims],
                                          transform_key=self.source_transform_key, use_positional_colors=False,
-                                         view_labels_size=3, show_plot=verbose, output_filename=filtered_filename)
+                                         view_labels_size=3, show_plot=self.verbose, output_filename=filtered_filename)
 
             logging.info(f'Foreground tiles: {len(register_sims)} / {len(sims)}')
 
             indices = np.where(foreground_map)[0]
         else:
             indices = range(len(sims))
-
-        logging.info('Registering...')
-        if verbose:
-            progress = tqdm()
 
         if is_stack:
             # register in 2d; pairwise consecutive views
@@ -402,8 +398,13 @@ class MVSRegistration:
             groupwise_resolution_kwargs = None
 
         register_msims = [msi_utils.get_msim_from_sim(sim) for sim in register_sims]
-        with ProgressBar() if verbose else nullcontext():
+
+        if self.verbose:
+            progress = tqdm(desc='Registering', total=1)
+
+        with ProgressBar() if self.verbose_mvs else nullcontext():
             try:
+                logging.info('Registering...')
                 reg_result = registration.register(
                     register_msims,
                     reg_channel=reg_channel,
@@ -445,15 +446,20 @@ class MVSRegistration:
                     confidence = 1 - min(math.sqrt(norm_distance), 1)
             except NotEnoughOverlapError:
                 logging.warning('Not enough overlap')
+                reg_result = {}
                 mappings = [param_utils.identity_transform(ndim=ndims, t_coords=[0])] * len(sims)
                 mappings_dict = {index: np.eye(ndims + 1) for index, _ in enumerate(sims)}
                 confidence = 0
 
-        if verbose:
+        if self.verbose:
             progress.update()
             progress.close()
 
-        # convert to multichannel images
+        output_chunksize = {'y': 1024, 'x': 1024}
+        for dim in sim0.dims:
+            if dim not in output_chunksize:
+                output_chunksize[dim] = 1
+
         if is_stack:
             # set 3D affine transforms from 2D registration params
             for index, sim in enumerate(sims):
@@ -461,55 +467,45 @@ class MVSRegistration:
                 affine_3d.loc[{dim: mappings[index].coords[dim] for dim in mappings[index].sel(t=0).dims}] = mappings[index].sel(t=0)
                 si_utils.set_sim_affine(sim, affine_3d, transform_key=self.reg_transform_key, base_transform_key=self.source_transform_key)
 
-            output_spacing = si_utils.get_spacing_from_sim(sim0) | {'z': z_scale}
-            # calculate output stack properties from input views
-            output_stack_properties = fusion.calc_stack_properties_from_view_properties_and_params(
-                [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
-                [np.array(si_utils.get_affine_from_sim(sim, self.reg_transform_key).squeeze()) for sim in sims],
-                output_spacing,
-                mode='union',
-            )
-            # convert to dict form (this should not be needed anymore in the next release)
-            output_stack_properties = {
-                k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
-                for k, v in output_stack_properties.items()
-            }
+            output_stack_properties = calc_output_properties(sims, self.reg_transform_key, z_scale=z_scale)
             # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
             # because it does not take into account the correct input z spacing because of stacks of one z plane
             output_stack_properties['shape']['z'] = len(sims)
             # fuse all sims together using simple average fusion
 
             data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
-            logging.info(f'Fusing {print_hbytes(data_size)}')
+            logging.info(f'Fusing Z stack {print_hbytes(data_size)}')
 
-            # sims Z coords need to be correctly set!
             fused_image = fusion.fuse(
                 sims,
                 transform_key=self.reg_transform_key,
                 output_stack_properties=output_stack_properties,
-                output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
+                output_chunksize=output_chunksize,
                 fusion_func=fusion.simple_average_fusion,
             )
         elif is_channel_overlay:
-            output_stack_properties = si_utils.get_stack_properties_from_sim(sim0)
-
-            data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
-            logging.info(f'Fusing {print_hbytes(data_size)}')
+            # convert to multichannel images
+            output_stack_properties = calc_output_properties(sims, self.reg_transform_key)
+            data_size = np.prod(list(output_stack_properties['shape'].values())) * len(sims) * source_type.itemsize
+            logging.info(f'Fusing channels {print_hbytes(data_size)}')
 
             channel_sims = [fusion.fuse(
                 [sim],
                 transform_key=self.reg_transform_key,
-                output_chunksize={'y': 1024, 'x': 1024},
+                output_chunksize=output_chunksize,
                 output_stack_properties=output_stack_properties
             ) for sim in sims]
             channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
             fused_image = xr.combine_nested([sim.rename() for sim in channel_sims], concat_dim='c', combine_attrs='override')
         else:
-            logging.info('Fusing...')
+            output_stack_properties = calc_output_properties(sims, self.reg_transform_key)
+            data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
+            logging.info(f'Fusing {print_hbytes(data_size)}')
+
             fused_image = fusion.fuse(
                 sims,
                 transform_key=self.reg_transform_key,
-                output_chunksize={'y': 1024, 'x': 1024},
+                output_chunksize=output_chunksize,
             )
         return {'reg_result': reg_result,
                 'mappings': mappings_dict,

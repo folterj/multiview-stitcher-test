@@ -7,14 +7,18 @@ from src.image.ome_tiff_helper import load_tiff, save_tiff
 from src.image.util import float2int_image, int2float_image, create_quantile_images
 
 
-def flatfield_correction(sims, transform_key, foreground_map, flatfield_quantile):
-    norm_image_filename = f'resources/norm{flatfield_quantile}.tiff'
-    if os.path.exists(norm_image_filename):
-        logging.warning('Loading cached normalisation image')
-        max_image = load_tiff(norm_image_filename)
-    else:
+def flatfield_correction(sims, transform_key, foreground_map, flatfield_quantile, cache_location=None):
+    max_image = None
+    if cache_location is not None:
+        norm_image_filename = cache_location + f'norm{flatfield_quantile}.tiff'
+        if os.path.exists(norm_image_filename):
+            max_image = load_tiff(norm_image_filename)
+
+    if max_image is None:
         max_image = calc_flatfield_image(sims, foreground_map, flatfield_quantile)
-        save_tiff(norm_image_filename, max_image)
+        if cache_location is not None:
+            save_tiff(norm_image_filename, max_image)
+
     return apply_flatfield_correction(max_image, sims, transform_key)
 
 def calc_flatfield_image(sims, foreground_map, flatfield_quantile):

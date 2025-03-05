@@ -15,6 +15,7 @@ class Pipeline:
 
     def init_logging(self):
         verbose = self.params_general.get('verbose', False)
+        verbose_mvs = self.params_general.get('verbose_mvs', False)
         log_filename = self.params_general.get('log_filename', 'logfile.log')
         log_format = self.params_general.get('log_format')
         basepath = os.path.dirname(log_filename)
@@ -24,13 +25,23 @@ class Pipeline:
         handlers = [logging.FileHandler(log_filename, encoding='utf-8')]
         if verbose:
             handlers += [logging.StreamHandler()]
+
+        logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers, encoding='utf-8')
+
+        # verbose external modules
+        if verbose_mvs:
             # expose multiview_stitcher.registration logger and make more verbose
             mvsr_logger = logging.getLogger('multiview_stitcher.registration')
             mvsr_logger.setLevel(logging.INFO)
             if len(mvsr_logger.handlers) == 0:
                 mvsr_logger.addHandler(logging.StreamHandler())
+        else:
+            # reduce verbose level
+            for module in ['multiview_stitcher', 'multiview_stitcher.registration', 'multiview_stitcher.fusion']:
+                logging.getLogger(module).setLevel(logging.WARNING)
 
-        logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers, encoding='utf-8')
+        for module in ['ome_zarr']:
+            logging.getLogger(module).setLevel(logging.WARNING)
 
     def run(self):
         break_on_error = self.params_general.get('break_on_error', False)

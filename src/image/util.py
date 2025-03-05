@@ -6,7 +6,7 @@ from skimage.transform import downscale_local_mean
 from tifffile import TiffFile
 
 from multiscale_spatial_image import MultiscaleSpatialImage
-from multiview_stitcher import msi_utils, param_utils
+from multiview_stitcher import msi_utils, param_utils, fusion
 from multiview_stitcher import spatial_image_utils as si_utils
 
 
@@ -647,6 +647,25 @@ def normalise(sims, transform_key, use_global=True):
         )
         new_sims.append(new_sim)
     return new_sims
+
+
+def calc_output_properties(sims, transform_key, z_scale=None):
+    output_spacing = si_utils.get_spacing_from_sim(sims[0])
+    if z_scale is not None:
+        output_spacing['z'] = z_scale
+    # calculate output stack properties from input views
+    output_properties = fusion.calc_stack_properties_from_view_properties_and_params(
+        [si_utils.get_stack_properties_from_sim(sim) for sim in sims],
+        [np.array(si_utils.get_affine_from_sim(sim, transform_key).squeeze()) for sim in sims],
+        output_spacing,
+        mode='union',
+    )
+    # convert to dict form (this should not be needed anymore in the next release)
+    output_properties = {
+        k: {dim: v[idim] for idim, dim in enumerate(output_spacing.keys())}
+        for k, v in output_properties.items()
+    }
+    return output_properties
 
 
 def get_translation_rotation_from_transform(transform, invert=False):
