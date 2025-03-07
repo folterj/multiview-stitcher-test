@@ -6,8 +6,8 @@ general:
   verbose: True
   verbose_mvs: False
   output:
-    clear: True
-    overwrite: True
+    clear: False
+    overwrite: False
     format: ome.zarr
     tile_size: [1024, 1024]
     compression: []

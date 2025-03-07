@@ -49,6 +49,7 @@ class MVSRegistration:
         show_original = self.params_general.get('show_original', False)
         output_params = self.params_general.get('output', {})
         clear = output_params.get('clear', False)
+        overwrite = output_params.get('overwrite', False)
 
         file_labels = []
         for filename in filenames:
@@ -64,8 +65,11 @@ class MVSRegistration:
         input_dir = os.path.dirname(filenames[0])
         parts = split_underscore_numeric(filenames[0])
         output_pattern = params['output'].format_map(parts)
-        output = os.path.join(input_dir, output_pattern)
+        output = os.path.join(input_dir, output_pattern)    # preserve trailing slash: do not use os.path.normpath()
         output_dir = os.path.dirname(output)
+        if not overwrite and os.path.exists(output_dir):
+            logging.warning(f'Existing output {os.path.normpath(output_dir)} skipped')
+            return
         if clear:
             shutil.rmtree(output_dir, ignore_errors=True)
         if not os.path.exists(output_dir):
