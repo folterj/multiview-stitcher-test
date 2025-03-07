@@ -67,8 +67,8 @@ class MVSRegistration:
         output_pattern = params['output'].format_map(parts)
         output = os.path.join(input_dir, output_pattern)    # preserve trailing slash: do not use os.path.normpath()
         output_dir = os.path.dirname(output)
-        if not overwrite and os.path.exists(output_dir):
-            logging.warning(f'Existing output {os.path.normpath(output_dir)} skipped')
+        if not overwrite and (os.path.exists(output_dir) and os.listdir(output_dir)):
+            logging.warning(f'Non-empty output directory {os.path.normpath(output_dir)} skipped')
             return
         if clear:
             shutil.rmtree(output_dir, ignore_errors=True)
