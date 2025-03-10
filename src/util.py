@@ -93,14 +93,18 @@ def print_dict(dct: dict, indent: int = 0) -> str:
 
 
 def print_hbytes(nbytes: int) -> str:
-    exps = ['', 'K', 'M', 'G', 'T']
+    exps = ['', 'K', 'M', 'G', 'T', 'P', 'E']
     div = 1024
     exp = 0
 
     while nbytes > div:
         nbytes /= div
         exp += 1
-    return f'{nbytes:.1f}{exps[exp]}B'
+    if exp < len(exps):
+        e = exps[exp]
+    else:
+        e = f'e{exp * 3}'
+    return f'{nbytes:.1f}{e}B'
 
 
 def check_round_significants(a: float, significant_digits: int) -> float:
