@@ -28,7 +28,7 @@ operations:
     input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
     #input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
     reset_coordinates: False
-    normalisation: True
+    normalisation: False
     method: phase_correlation
     extra_metadata: {'scale': {'z': 0.05}}
     output: ../../aligned/
