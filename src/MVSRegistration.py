@@ -239,7 +239,7 @@ class MVSRegistration:
             else:
                 z_position = 0
             if last_z_position is not None and z_position != last_z_position:
-                different_z_positions = False
+                different_z_positions = True
             translations.append(translation)
             rotations.append(source.get_rotation())
             image = redimension_data(source.get_source_dask()[0],
@@ -264,6 +264,7 @@ class MVSRegistration:
             translation_dict = convert_xyz_to_dict(translation)
             if (len(translation_dict) > 0 and 'z' not in translation_dict) or increase_z_positions:
                 translation_dict['z'] = z_position
+                print('z_position', z_position)
             if increase_z_positions:
                 z_position += z_scale
             channel_labels = [channel.get('label', '') for channel in source.get_channels()]
