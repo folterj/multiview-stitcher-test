@@ -474,7 +474,9 @@ class MVSRegistration:
             output_stack_properties = calc_output_properties(sims, self.reg_transform_key, z_scale=z_scale)
             # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
             # because it does not take into account the correct input z spacing because of stacks of one z plane
+            print(output_stack_properties)
             output_stack_properties['shape']['z'] = len(sims)
+            print(output_stack_properties['shape'])
             # fuse all sims together using simple average fusion
 
             data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
