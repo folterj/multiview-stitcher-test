@@ -68,7 +68,7 @@ class MVSRegistration:
         output = os.path.join(input_dir, output_pattern)    # preserve trailing slash: do not use os.path.normpath()
         output_dir = os.path.dirname(output)
         if not overwrite and (os.path.exists(output_dir) and os.listdir(output_dir)):
-            logging.warning(f'Non-empty output directory {os.path.normpath(output_dir)} skipped')
+            logging.warning(f'Skipping non-empty output directory {os.path.normpath(output_dir)}')
             return
         if clear:
             shutil.rmtree(output_dir, ignore_errors=True)
@@ -264,7 +264,6 @@ class MVSRegistration:
             translation_dict = convert_xyz_to_dict(translation)
             if (len(translation_dict) > 0 and 'z' not in translation_dict) or increase_z_positions:
                 translation_dict['z'] = z_position
-                print('z_position', z_position)
             if increase_z_positions:
                 z_position += z_scale
             channel_labels = [channel.get('label', '') for channel in source.get_channels()]
