@@ -5,6 +5,7 @@ general:
   show_filtered: False
   break_on_error: True
   verbose: True
+  verbose_mvs: False
   output:
     format: ome.tiff, ome.zarr
     tile_size: []

@@ -16,7 +16,7 @@ class RegistrationMethodCPD(RegistrationMethod):
         moving_points = self.convert_points_to_3d(moving_data.data)
 
         if len(moving_points) > 1 and len(fixed_points) > 1:
-            result_cpd = cpd.registration_cpd(fixed_points, moving_points, maxiter=max_iter)
+            result_cpd = cpd.registration_cpd(moving_points, fixed_points, maxiter=max_iter)
             transformation = result_cpd.transformation
             S = transformation.scale * np.eye(3)
             R = transformation.rot

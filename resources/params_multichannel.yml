@@ -4,6 +4,7 @@ general:
   show_original: False
   break_on_error: True
   verbose: True
+  verbose_mvs: False
   output:
     format: ome.zarr, ome.tiff
     tile_size: []
