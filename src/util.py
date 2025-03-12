@@ -125,6 +125,10 @@ def round_significants(a: float, significant_digits: int) -> float:
     return a
 
 
+def split_path(path: str) -> list:
+    return os.path.normpath(path).split(os.path.sep)
+
+
 def get_filetitle(filename: str) -> str:
     filebase = os.path.basename(filename)
     title = os.path.splitext(filebase)[0].rstrip('.ome')

@@ -51,12 +51,21 @@ class MVSRegistration:
         clear = output_params.get('clear', False)
         overwrite = output_params.get('overwrite', True)
 
+        # get unique labels from filenames
         file_labels = []
         for filename in filenames:
             file_label = '-'.join(map(str, find_all_numbers(filename)[-2:]))
             if file_label == '':
                 file_label = get_filetitle(filename)
             file_labels.append(file_label)
+        if len(set(file_labels)) < len(file_labels):
+            # duplicate labels: get unique differences
+            file_labels = []
+            last_filename = filenames[1]
+            for filename in filenames:
+                unique = set(split_path(filename)) - set(split_path(last_filename))
+                file_labels.append('_'.join(unique))
+                last_filename = filename
 
         if len(filenames) == 0:
             logging.warning('Skipping (no tiles)')
@@ -104,48 +113,45 @@ class MVSRegistration:
                        params=output_params)
 
         results = self.register(sims, params)
-
+        reg_result = results['reg_result']
         sims = results['sims']
         mappings = results['mappings']
-        mappings_dict = results['mappings_dict']
-        mappings2 = {file_labels[index]: mapping.tolist() for index, mapping in mappings_dict.items()}
+        mappings2 = {file_labels[index]: mapping.data[0].tolist() for index, mapping in mappings.items()}
+        results['residual_errors'] = {file_labels[key[0]] + ' - ' + file_labels[key[1]]: value for key, value in results['residual_errors'].items()}
+        results['registration_qualities'] = {file_labels[key[0]] + ' - ' + file_labels[key[1]]: value for key, value in results['registration_qualities'].items()}
 
-        reg_result = results['reg_result']
-        pairwise_registration_results = reg_result.get('pairwise_registration', {})
-        groupwise_resolution_results = reg_result.get('groupwise_resolution', {})
-        registration_quality = np.mean(list(pairwise_registration_results.get('metrics', {}).get('qualities', {}).values()))
-        residual_error = np.mean(list(groupwise_resolution_results.get('metrics', {}).get('residuals', {}).values()))
-        metrics = (f'Residual error: {residual_error:.3f}'
-                   f' Registration quality: {registration_quality:.3f}'
-                   f' Confidence: {results["confidence"]:.3f}')
-        logging.info(metrics)
+        metrics = self.calc_metrics(results)
+
+        logging.info(metrics['summary'])
+        with open(output + 'metrics.json', 'w') as file:
+            json.dump(metrics, file, indent=4)
 
         with open(output + 'mappings.json', 'w') as file:
             json.dump(mappings2, file, indent=4)
 
         if self.verbose:
             print('Mappings:')
-            print(mappings2)
+            for key, value in mappings2.items():
+                print(f'{key}: {value}')
 
         with open(output + 'mappings.csv', 'w', newline='') as file:
             csvwriter = csv.writer(file)
             header = ['Tile', 'x', 'y', 'z', 'rotation']
             csvwriter.writerow(header)
             if self.verbose:
-                print(header)
-            for sim, (index, mapping), position, rotation in zip(sims, mappings_dict.items(), positions, rotations):
+                print('\t'.join(header))
+            for sim, (label, mapping), position, rotation in zip(sims, mappings2.items(), positions, rotations):
                 if not normalise_orientation:
                     # rotation already in msim affine transform
                     rotation = None
                 position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
-                                                      transform=mapping, translation0=position, rotation=rotation)
-                row = [file_labels[index]] + list(position) + [rotation]
+                                                      transform=np.array(mapping),
+                                                      translation0=position,
+                                                      rotation=rotation)
+                row = [label] + list(position) + [rotation]
                 csvwriter.writerow(row)
                 if self.verbose:
-                    print(row)
-
-        with open(output + 'metrics.txt', 'w') as file:
-            file.write(metrics)
+                    print('\t'.join(map(str, row)))
 
         fused_image = self.fuse(sims, mappings, params)
         logging.info('Saving fused image...')
@@ -160,13 +166,13 @@ class MVSRegistration:
                                  use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
 
-        summary_plot = pairwise_registration_results.get('summary_plot')
+        summary_plot = reg_result.get('pairwise_registration', {}).get('summary_plot')
         if summary_plot is not None:
             figure, axes = summary_plot
             summary_plot_filename = output + 'pairwise_registration.pdf'
             figure.savefig(summary_plot_filename)
 
-        summary_plot = groupwise_resolution_results.get('summary_plot')
+        summary_plot = reg_result.get('groupwise_resolution', {}).get('summary_plot')
         if summary_plot is not None:
             figure, axes = summary_plot
             summary_plot_filename = output + 'groupwise_resolution.pdf'
@@ -436,33 +442,30 @@ class MVSRegistration:
                         sims[index],
                         msi_utils.get_transform_from_msim(reg_msim, transform_key=self.reg_transform_key),
                         transform_key=self.reg_transform_key)
-
                 mappings = reg_result['params']
-                mappings_dict = {index: mapping.data[0] for index, mapping in zip(indices, mappings)}
-                distances = [np.linalg.norm(param_utils.translation_from_affine(mapping)).item()
-                             for mapping in mappings_dict.values()]
-
-                if len(register_sims) > 2:
-                    # Coefficient of variation
-                    cvar = np.std(distances) / np.mean(distances)
-                    confidence = 1 - min(cvar / 10, 1)
-                else:
-                    norm_distance = np.sum(distances) / np.linalg.norm(size)
-                    confidence = 1 - min(math.sqrt(norm_distance), 1)
+                # re-index from subset of sims
+                residual_error_dict = reg_result.get('groupwise_resolution', {}).get('metrics', {}).get('residuals', {})
+                residual_error_dict = {(indices[key[0]], indices[key[1]]): value.item()
+                                       for key, value in residual_error_dict.items()}
+                registration_qualities_dict = reg_result.get('pairwise_registration', {}).get('metrics', {}).get('qualities', {})
+                registration_qualities_dict = {(indices[key[0]], indices[key[1]]): value
+                                               for key, value in registration_qualities_dict.items()}
             except NotEnoughOverlapError:
                 logging.warning('Not enough overlap')
                 reg_result = {}
                 mappings = [param_utils.identity_transform(ndim=ndims, t_coords=[0])] * len(sims)
-                confidence = 0
+
+        # re-index from subset of sims
+        mappings_dict = {index: mapping for index, mapping in zip(indices, mappings)}
 
         if self.verbose:
             progress.update()
             progress.close()
 
         return {'reg_result': reg_result,
-                'mappings': mappings,
-                'mappings_dict': mappings_dict,
-                'confidence': confidence,
+                'mappings': mappings_dict,
+                'residual_errors': residual_error_dict,
+                'registration_qualities': registration_qualities_dict,
                 'sims': sims}
 
     def fuse(self, sims, mappings, params):
@@ -493,11 +496,11 @@ class MVSRegistration:
             output_stack_properties['shape']['z'] = len(sims)
             if self.verbose:
                 logging.info(f'Output stack: {output_stack_properties}')
-            # fuse all sims together using simple average fusion
 
             data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
             logging.info(f'Fusing Z stack {print_hbytes(data_size)}')
 
+            # fuse all sims together using simple average fusion
             fused_image = fusion.fuse(
                 sims,
                 transform_key=self.reg_transform_key,
@@ -534,3 +537,35 @@ class MVSRegistration:
                 output_chunksize=output_chunksize,
             )
         return fused_image
+
+    def calc_metrics(self, results):
+        mappings = results['mappings']
+        distances = [np.linalg.norm(param_utils.translation_from_affine(mapping.data[0]))
+                     for mapping in mappings.values()]
+
+        if len(distances) > 2:
+            # Coefficient of variation
+            cvar = np.std(distances) / np.mean(distances)
+            confidence = 1 - min(cvar / 10, 1)
+        else:
+            sim0 = results['sims'][0]
+            size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
+            norm_distance = np.sum(distances) / np.linalg.norm(size)
+            confidence = 1 - min(math.sqrt(norm_distance), 1)
+
+        residual_errors = results['residual_errors']
+        residual_error = np.mean(list(residual_errors.values()))
+
+        registration_qualities = {key: value.item() for key, value in results['registration_qualities'].items()}
+        registration_quality = np.mean(list(registration_qualities.values()))
+
+        summary = (f'Residual error: {residual_error:.3f}'
+                   f' Registration quality: {registration_quality:.3f}'
+                   f' Confidence: {confidence:.3f}')
+
+        return {'confidence': confidence,
+                'residual_error': residual_error,
+                'residual_errors': residual_errors,
+                'registration_quality': registration_quality,
+                'registration_qualities': registration_qualities,
+                'summary': summary}
