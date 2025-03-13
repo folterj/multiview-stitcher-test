@@ -32,7 +32,7 @@ class MVSRegistration:
         self.verbose = self.params_general.get('verbose', False)
         self.verbose_mvs = self.params_general.get('verbose_mvs', False)
 
-        self.source_transform_key = 'stage_metadata'
+        self.source_transform_key = 'source_metadata'
         self.reg_transform_key = 'registered'
         self.transition_transform_key = 'transition'
 
@@ -40,9 +40,8 @@ class MVSRegistration:
 
     def run_operation(self, filenames, params):
         operation = params['operation']
-        is_stack = ('stack' in operation)
-        is_transition = ('transition' in operation)
         normalise_orientation = params.get('normalise_orientation', False)
+        overlap_threshold = params.get('overlap_threshold', 0.5)
         extra_metadata = params.get('extra_metadata', {})
         channels = extra_metadata.get('channels', [])
 
@@ -50,6 +49,10 @@ class MVSRegistration:
         output_params = self.params_general.get('output', {})
         clear = output_params.get('clear', False)
         overwrite = output_params.get('overwrite', True)
+
+        is_stack = ('stack' in operation)
+        is_transition = ('transition' in operation)
+        is_channel_overlay = (len(channels) > 1)
 
         # get unique labels from filenames
         file_labels = []
@@ -68,7 +71,7 @@ class MVSRegistration:
                 last_filename = filename
 
         if len(filenames) == 0:
-            logging.warning('Skipping (no tiles)')
+            logging.warning('Skipping (no images)')
             return
 
         input_dir = os.path.dirname(filenames[0])
@@ -84,18 +87,37 @@ class MVSRegistration:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        sims, positions, rotations = self.init_tiles(filenames, params)
+        sims, positions, rotations = self.init_sims(filenames, params)
+
+        with open(output + 'prereg_mappings.csv', 'w', newline='') as file:
+            csvwriter = csv.writer(file)
+            header = ['Image', 'x', 'y', 'z', 'rotation']
+            csvwriter.writerow(header)
+            if self.verbose:
+                print('Pre-reg mappings')
+                print('\t'.join(header))
+            for label, sim in zip(file_labels, sims):
+                position, rotation = get_data_mapping(sim, transform_key=self.source_transform_key)
+                row = [label] + list(position) + [rotation]
+                csvwriter.writerow(row)
+                if self.verbose:
+                    print('\t'.join(map(str, row)))
 
         registered_fused_filename = output + 'registered'
         if len(filenames) == 1:
-            logging.warning('Skipping registration (single tile)')
+            logging.warning('Skipping registration (single image)')
             save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
                        params=output_params)
             return
 
+        overlaps = self.validate_overlap(sims, file_labels, is_stack or is_channel_overlay)
+        overall_overlap = np.mean(overlaps)
+        if overall_overlap < overlap_threshold:
+            raise ValueError(f'Not enough overlap: {overall_overlap * 100:.1f}%')
+
         if show_original:
             # before registration:
-            logging.info('Plotting tiles...')
+            logging.info('Plotting images...')
             original_positions_filename = output + 'positions_original.pdf'
             vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.source_transform_key,
                                      use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
@@ -136,7 +158,7 @@ class MVSRegistration:
 
         with open(output + 'mappings.csv', 'w', newline='') as file:
             csvwriter = csv.writer(file)
-            header = ['Tile', 'x', 'y', 'z', 'rotation']
+            header = ['Image', 'x', 'y', 'z', 'rotation']
             csvwriter.writerow(header)
             if self.verbose:
                 print('\t'.join(header))
@@ -159,8 +181,8 @@ class MVSRegistration:
                    transform_key=self.reg_transform_key, channels=channels, translation0=positions[0],
                    params=output_params)
 
-        # plot the tile configuration after registration
-        logging.info('Plotting tiles...')
+        # plot the image configuration after registration
+        logging.info('Plotting images...')
         registered_positions_filename = output + 'positions_registered.pdf'
         vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.reg_transform_key,
                                  use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
@@ -212,14 +234,14 @@ class MVSRegistration:
 
             video.close()
 
-    def init_tiles(self, filenames, params):
+    def init_sims(self, filenames, params):
         operation = params['operation']
-        is_stack = ('stack' in operation)
-        invert_x_coordinates = params.get('invert_x_coordinates', False)
         normalise_orientation = params.get('normalise_orientation', False)
-        reset_coordinates = params.get('reset_coordinates', False)
+        source_metadata = params.get('source_metadata', 'source')
         extra_metadata = params.get('extra_metadata', {})
         z_scale = extra_metadata.get('scale', {}).get('z', 1)
+
+        is_stack = ('stack' in operation)
 
         sources = [create_source(file) for file in filenames]
         images = []
@@ -234,12 +256,12 @@ class MVSRegistration:
 
         last_z_position = None
         different_z_positions = False
-        for source in tqdm(sources, disable=not self.verbose, desc='Initialising tiles'):
-            if reset_coordinates or len(source.get_position()) == 0:
-                translation = np.zeros(3)
+        for source in tqdm(sources, disable=not self.verbose, desc='Initialising sims'):
+            if isinstance(source_metadata, dict):
+                translation = [source_metadata.get('x', 0), source_metadata.get('y', 0), source_metadata.get('z', 0)]
             else:
                 translation = np.array(source.get_position_micrometer())
-                if invert_x_coordinates:
+                if 'invert' in source_metadata:
                     translation[0] = -translation[0]
                     translation[1] = -translation[1]
             if len(translation) >= 3:
@@ -250,12 +272,9 @@ class MVSRegistration:
                 different_z_positions = True
             translations.append(translation)
             rotations.append(source.get_rotation())
-            image = redimension_data(source.get_source_dask()[0],
-                                     source.dimension_order, output_order)
+            image = redimension_data(source.get_source_dask()[0], source.dimension_order, output_order)
             images.append(image)
             last_z_position = z_position
-
-        increase_z_positions = is_stack and not different_z_positions
 
         if normalise_orientation:
             size = np.array(source0.get_size()) * source0.get_pixel_size_micrometer()
@@ -263,6 +282,7 @@ class MVSRegistration:
 
         #translations = [np.array(translation) * 1.25 for translation in translations]
 
+        increase_z_positions = is_stack and not different_z_positions
         z_position = 0
         for source, image, translation, rotation in zip(sources, images, translations, rotations):
             # transform #dimensions need to match
@@ -291,6 +311,25 @@ class MVSRegistration:
             sims.append(sim.chunk({'y': 1024, 'x': 1024}))
         return sims, translations, rotations
 
+    def validate_overlap(self, sims, labels, expect_large_overlap=False):
+        overlaps = []
+        sim0 = sims[0]
+        size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
+        normsize = np.linalg.norm(size)
+        positions = [si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims]
+        for index, position in enumerate(positions):
+            distances = [math.dist(position, pos) for index1, pos in enumerate(positions) if not index1 == index]
+            overlap = min(distances) / normsize
+            if overlap >= 1:
+                logging.warning(f'{labels[index]} has no overlap')
+                overlaps.append(False)
+            elif expect_large_overlap and overlap > 0.5:
+                logging.warning(f'{labels[index]} has small overlap')
+                overlaps.append(False)
+            else:
+                overlaps.append(True)
+        return overlaps
+
     def register(self, sims, params):
         sim0 = sims[0]
         ndims = si_utils.get_ndim_from_sim(sim0)
@@ -299,24 +338,25 @@ class MVSRegistration:
 
         operation = params['operation']
         method = params.get('method', '').lower()
+        flatfield_quantile = params.get('flatfield_quantile')
+        normalisation = params.get('normalisation', False)
+        filter_foreground = params.get('filter_foreground', False)
+        use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
+        use_rotation = params.get('use_rotation', False)
+        extra_metadata = params.get('extra_metadata', {})
+        channels = extra_metadata.get('channels', [])
+
+        show_filtered = self.params_general.get('show_filtered', False)
+
+        is_stack = ('stack' in operation)
+        is_channel_overlay = (len(channels) > 1)
+
         reg_channel = params.get('channel', 0)
         if isinstance(reg_channel, int):
             reg_channel_index = reg_channel
             reg_channel = None
         else:
             reg_channel_index = None
-
-        flatfield_quantile = params.get('flatfield_quantile')
-        normalisation = params.get('normalisation', False)
-        filter_foreground = params.get('filter_foreground', False)
-        use_orthogonal_pairs = params.get('use_orthogonal_pairs', False)
-        use_rotation = params.get('use_rotation', False)
-        show_filtered = self.params_general.get('show_filtered', False)
-
-        extra_metadata = params.get('extra_metadata', {})
-        channels = extra_metadata.get('channels', [])
-        is_stack = ('stack' in operation)
-        is_channel_overlay = (len(channels) > 1)
 
         if flatfield_quantile is not None or filter_foreground:
             foreground_map = calc_foreground_map(sims)
@@ -334,15 +374,15 @@ class MVSRegistration:
         if normalisation:
             use_global = not is_channel_overlay
             if use_global:
-                logging.info('Normalising tiles (global)...')
+                logging.info('Normalising image (global)...')
             else:
-                logging.info('Normalising tiles...')
+                logging.info('Normalising images...')
             register_sims = normalise(sims, self.source_transform_key, use_global=use_global)
         else:
             register_sims = sims
 
         if filter_foreground:
-            logging.info('Filtering foreground tiles...')
+            logging.info('Filtering foreground images...')
             #tile_vars = np.array([np.asarray(np.std(sim)).item() for sim in sims])
             #threshold1 = np.mean(tile_vars)
             #threshold2 = np.median(tile_vars)
@@ -357,7 +397,7 @@ class MVSRegistration:
                                          transform_key=self.source_transform_key, use_positional_colors=False,
                                          view_labels_size=3, show_plot=self.verbose, output_filename=filtered_filename)
 
-            logging.info(f'Foreground tiles: {len(register_sims)} / {len(sims)}')
+            logging.info(f'Foreground images: {len(register_sims)} / {len(sims)}')
 
             indices = np.where(foreground_map)[0]
         else:
@@ -369,7 +409,7 @@ class MVSRegistration:
             pairs = [(index, index + 1) for index in range(len(register_sims) - 1)]
         elif use_orthogonal_pairs:
             origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
-            pairs, _ = get_orthogonal_pairs_from_tiles(origins, size)
+            pairs, _ = get_orthogonal_pairs(origins, size)
             logging.info(f'#pairs: {len(pairs)}')
         else:
             pairs = None
@@ -454,6 +494,8 @@ class MVSRegistration:
                 logging.warning('Not enough overlap')
                 reg_result = {}
                 mappings = [param_utils.identity_transform(ndim=ndims, t_coords=[0])] * len(sims)
+                residual_error_dict = {}
+                registration_qualities_dict = {}
 
         # re-index from subset of sims
         mappings_dict = {index: mapping for index, mapping in zip(indices, mappings)}
@@ -469,10 +511,11 @@ class MVSRegistration:
                 'sims': sims}
 
     def fuse(self, sims, mappings, params):
+        operation = params['operation']
         extra_metadata = params.get('extra_metadata', {})
         channels = extra_metadata.get('channels', [])
         z_scale = extra_metadata.get('scale', {}).get('z', 1)
-        operation = params['operation']
+
         is_stack = ('stack' in operation)
         is_channel_overlay = (len(channels) > 1)
 

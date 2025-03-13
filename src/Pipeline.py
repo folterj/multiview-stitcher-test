@@ -86,6 +86,7 @@ class Pipeline:
                     matches[0] = filenames
             filesets = list(matches.values())
             fileset_labels = [match_label + label for label in matches.keys()]
+            logging.info(f'# matched file sets: {len(filesets)}')
         else:
             filesets = [filenames]
             fileset_labels = ['']

@@ -308,7 +308,7 @@ def normalise_rotated_positions(positions0, rotations0, size):
     positions_centre = np.mean(positions0, 0)
     center_index = np.argmin([math.dist(position, positions_centre) for position in positions0])
     center_position = positions0[center_index]
-    pairs, angles = get_orthogonal_pairs_from_tiles(positions0, size)
+    pairs, angles = get_orthogonal_pairs(positions0, size)
     if len(pairs) > 0:
         mean_angle = np.mean(angles)
         for position0, rotation in zip(positions0, rotations0):
@@ -324,7 +324,7 @@ def normalise_rotated_positions(positions0, rotations0, size):
     return positions, rotations
 
 
-def get_orthogonal_pairs_from_tiles(origins, image_size_um):
+def get_orthogonal_pairs(origins, image_size_um):
     """
     Get pairs of orthogonal neighbors from a list of tiles.
     Tiles don't have to be placed on a regular grid.

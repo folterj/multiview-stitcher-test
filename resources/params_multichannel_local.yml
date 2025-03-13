@@ -17,7 +17,7 @@ operations:
     input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/subselection/*.ome.tiff
     #input: D:/slides/EM04768_01_substrate_04/Reflection/20_percent_overlap/ome_tif_reflection/converted/*.ome.tiff
     flatfield_quantile: 0.95
-    invert_x_coordinates: True
+    source_metadata: source invert
     filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
@@ -28,7 +28,7 @@ operations:
     input: D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/subselection/*.ome.tiff
     #input: D:/slides/EM04768_01_substrate_04/Fluorescence/20_percent_overlap/EM04768_01_sub_04_fluorescence_10x/converted/*.ome.tiff
     flatfield_quantile: 0.95
-    invert_x_coordinates: True
+    source_metadata: source invert
     filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True

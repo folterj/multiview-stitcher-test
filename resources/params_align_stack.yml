@@ -5,6 +5,7 @@ general:
   show_filtered: False
   break_on_error: False
   verbose: True
+  verbose_mvs: False
   output:
     clear: True
     format: ome.zarr, ome.tiff
@@ -16,9 +17,9 @@ general:
 operations:
   - operation: stack
     input: D:/slides/EM04788_02_Sub_02/10nm/subset/*.tif
-    reset_coordinates: True
+    source_metadata: source
+    extra_metadata: {'scale': {'z': 0.05}}
     normalisation: True
     use_rotation: True
     method: cpd
-    extra_metadata: {'scale': {'z': 0.05}}
     output: aligned/
