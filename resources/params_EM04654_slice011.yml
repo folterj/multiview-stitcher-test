@@ -16,18 +16,18 @@ general:
 
 operations:
   - operation: register match s
-    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-    input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
-    normalise_orientation: True
+    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
+    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: ../../../stitched_subset/slice{s}/
+    output: ../../../stitched/slice{s}/
 
   - operation: stack
-    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
-    input: D:/slides/EM04654_slice011/stitched_subset/slice?????/registered.ome.zarr
-    #source_metadata: {'x': 0, 'y': 0}
+    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
+    #input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
+    source_metadata: source  #{'x': 0, 'y': 0}
     extra_metadata: {'scale': {'z': 0.05}}
     normalisation: False
     method: phase_correlation

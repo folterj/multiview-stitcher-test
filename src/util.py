@@ -266,11 +266,12 @@ def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
 
 def create_transform(center, angle):
     if len(center) == 2:
-        center = np.array(list(center) + [1])
+        center = np.array(list(center) + [0])
     r = Rotation.from_euler('z', angle, degrees=True)
     t = center - r.apply(center, inverse=True)
-    transform = np.transpose(r.as_matrix())
-    transform[:, -1] += t
+    transform = np.eye(4)
+    transform[:3, :3] = np.transpose(r.as_matrix())
+    transform[:3, -1] += t
     return transform
 
 
@@ -278,12 +279,10 @@ def apply_transform(points, transform):
     new_points = []
     for point in points:
         point_len = len(point)
-        if point_len == 2:
-            point = list(point) + [1]
+        while len(point) < len(transform):
+            point = list(point) + [0]
         new_point = np.dot(point, np.transpose(transform))
-        if point_len == 2:
-            new_point = new_point[:2]
-        new_points.append(new_point)
+        new_points.append(new_point[:point_len])
     return new_points
 
 

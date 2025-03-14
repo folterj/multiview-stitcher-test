@@ -16,7 +16,7 @@ operations:
     #input: D:/slides/EM04788_02_Sub_02/Section5/.*_t\d{4}.*.tif
     input: C:/Project/slides/EM04788_02_Sub_02/Section20/.*_t\d{4}.*.tif
     normalisation: True
-    normalise_orientation: True
+    source_metadata: source normalise
     use_orthogonal_pairs: True
     method: phase_correlation
     output: stitched/

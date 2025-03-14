@@ -40,10 +40,11 @@ class MVSRegistration:
 
     def run_operation(self, filenames, params):
         operation = params['operation']
-        normalise_orientation = params.get('normalise_orientation', False)
         overlap_threshold = params.get('overlap_threshold', 0.5)
+        source_metadata = params.get('source_metadata', {})
         extra_metadata = params.get('extra_metadata', {})
         channels = extra_metadata.get('channels', [])
+        normalise_orientation = 'norm' in source_metadata
 
         show_original = self.params_general.get('show_original', False)
         output_params = self.params_general.get('output', {})
@@ -236,21 +237,22 @@ class MVSRegistration:
 
     def init_sims(self, filenames, params):
         operation = params['operation']
-        normalise_orientation = params.get('normalise_orientation', False)
         source_metadata = params.get('source_metadata', 'source')
         extra_metadata = params.get('extra_metadata', {})
         z_scale = extra_metadata.get('scale', {}).get('z', 1)
-
-        is_stack = ('stack' in operation)
+        normalise_orientation = 'norm' in source_metadata
 
         sources = [create_source(file) for file in filenames]
+        source0 = sources[0]
         images = []
         sims = []
         translations = []
         rotations = []
 
-        source0 = sources[0]
-        output_order = 'zyx' if is_stack else 'yx'
+        is_stack = ('stack' in operation)
+        is_3d = (source0.get_size_xyzct()[2] > 1)
+
+        output_order = 'zyx' if is_stack or is_3d else 'yx'
         if source0.get_nchannels() > 1:
             output_order += 'c'
 

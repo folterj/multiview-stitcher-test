@@ -2,6 +2,7 @@ import logging
 import os
 from tqdm import tqdm
 
+from src.image.source_helper import get_images_metadata
 from src.util import dir_regex, get_filetitle, find_all_numbers, split_underscore_numeric
 
 
@@ -62,6 +63,7 @@ class Pipeline:
     def run_operation(self, params):
         operation = params['operation']
         filenames = dir_regex(params['input'])
+        verbose = self.params_general.get('verbose', False)
         if len(filenames) == 0:
             logging.warning(f'Skipping operation {operation} (no files)')
             return
@@ -90,6 +92,10 @@ class Pipeline:
         else:
             filesets = [filenames]
             fileset_labels = ['']
+
+        if verbose:
+            for fileset, fileset_label in zip(filesets, fileset_labels):
+                logging.info(f'File set: {fileset_label} metadata:\n' + get_images_metadata(fileset))
 
         for fileset, fileset_label in zip(filesets, fileset_labels):
             if len(filesets) > 1:

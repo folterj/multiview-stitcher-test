@@ -16,7 +16,7 @@ general:
 operations:
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_03/EM04788_03_Sub_01/10 nm pixel/Section7/.*_t\d{4}.*.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
@@ -24,7 +24,7 @@ operations:
 
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section20/.*_t\d{4}.*.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
@@ -32,7 +32,7 @@ operations:
 
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section21/.*_t\d{4}.*.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
@@ -40,7 +40,7 @@ operations:
 
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section22/.*_t\d{4}.*.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
@@ -48,7 +48,7 @@ operations:
 
   - operation: register
     input: /nemo/project/proj-czi-vp/processed/em/EM04788/EM04788_02/EM04788_02_Sub_02/20 nm pixel/Section23/.*_t\d{4}.*.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation

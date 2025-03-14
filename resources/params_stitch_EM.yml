@@ -15,7 +15,7 @@ general:
 operations:
   - operation: register
     input: C:/Project/slides/EM04768_01_substrate_04/EM/a0004/roi0000/.*.ome.tif
-    normalise_orientation: True
+    source_metadata: source normalise
     #flatfield_quantile: 0.95
     normalisation: True
     filter_foreground: False
