@@ -264,12 +264,12 @@ def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
     return transform
 
 
-def create_transform(center, angle):
+def create_transform(center, angle, matrix_size=3):
     if len(center) == 2:
         center = np.array(list(center) + [0])
     r = Rotation.from_euler('z', angle, degrees=True)
     t = center - r.apply(center, inverse=True)
-    transform = np.eye(4)
+    transform = np.eye(matrix_size)
     transform[:3, :3] = np.transpose(r.as_matrix())
     transform[:3, -1] += t
     return transform
@@ -313,7 +313,7 @@ def normalise_rotated_positions(positions0, rotations0, size):
         for position0, rotation in zip(positions0, rotations0):
             if rotation is None:
                 rotation = -mean_angle
-            transform = create_transform(center=center_position, angle=-rotation)
+            transform = create_transform(center=center_position, angle=-rotation, matrix_size=4)
             position = apply_transform([position0], transform)[0]
             positions.append(position)
             rotations.append(rotation)
