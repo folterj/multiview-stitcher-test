@@ -1,6 +1,4 @@
-from multiview_stitcher import fusion, registration, vis_utils
-from multiview_stitcher import spatial_image_utils as si_utils
-import numpy as np
+from multiview_stitcher import registration, vis_utils
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import xarray as xr
@@ -135,8 +133,6 @@ def test2(sims, tmp_path):
     # stack_sims = sims
     fused_image = xr.combine_nested([sim.rename() for sim in stack_sims], concat_dim='z', combine_attrs='override')
     # fused_image.data.compute(scheduler='single-threaded')
-    import matplotlib.pyplot as plt
-    import tifffile
     #tifffile.imshow(fused_image.data)
     #plt.show()
     show_image(fused_image[0][0][0])
@@ -207,7 +203,7 @@ def test5(sims, tmp_path):
     transform_key = 'stage_metadata'
     new_transform_key = 'registered'
 
-    from src.RegistrationMethodCPD import RegistrationMethodCPD
+    from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
     registration_method = RegistrationMethodCPD(sims[0].dtype)
     pairwise_reg_func = registration_method.registration
 

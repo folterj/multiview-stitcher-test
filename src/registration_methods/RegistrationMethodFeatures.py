@@ -4,7 +4,8 @@ import numpy as np
 from sklearn.neighbors import KDTree
 from spatial_image import SpatialImage
 
-from src.RegistrationMethod import RegistrationMethod
+from src.image.util import show_image, uint8_image
+from src.registration_methods.RegistrationMethod import RegistrationMethod
 
 
 class RegistrationMethodFeatures(RegistrationMethod):
@@ -13,7 +14,7 @@ class RegistrationMethodFeatures(RegistrationMethod):
         self.feature_model = cv.ORB_create()
 
     def detect_features(self, data):
-        data = data.astype(self.source_type)
+        data = uint8_image(data.astype(self.source_type))
         kp, desc = self.feature_model.detectAndCompute(data, None)
         points = [kp1.pt for kp1 in kp]
         if len(points) >= 2:
@@ -22,8 +23,10 @@ class RegistrationMethodFeatures(RegistrationMethod):
             nn_distance = np.median(dist[:, 1])
         else:
             nn_distance = 1
-        # image = cv.drawKeypoints(data, kp, data)
-        # show_image(image)
+
+        #data = data.squeeze()
+        #image = cv.drawKeypoints(data, kp, data)
+        #show_image(image)
         return points, desc, nn_distance
 
     def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:

@@ -3,7 +3,7 @@ import numpy as np
 from probreg import cpd
 from spatial_image import SpatialImage
 
-from src.RegistrationMethod import RegistrationMethod
+from src.registration_methods.RegistrationMethod import RegistrationMethod
 from src.image.util import detect_area_points
 from src.util import points_to_3d
 

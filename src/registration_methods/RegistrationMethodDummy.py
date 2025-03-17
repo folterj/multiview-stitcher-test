@@ -2,7 +2,7 @@ import cv2 as cv
 import numpy as np
 from spatial_image import SpatialImage
 
-from src.RegistrationMethod import RegistrationMethod
+from src.registration_methods.RegistrationMethod import RegistrationMethod
 
 
 class RegistrationMethodDummy(RegistrationMethod):

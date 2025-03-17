@@ -6,13 +6,9 @@ from contextlib import nullcontext
 from dask.diagnostics import ProgressBar
 import json
 import logging
-import math
 import multiview_stitcher
-from multiview_stitcher import registration, fusion, msi_utils, vis_utils, param_utils
-from multiview_stitcher import spatial_image_utils as si_utils
+from multiview_stitcher import registration, vis_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
-import numpy as np
-import os
 import shutil
 from tqdm import tqdm
 import xarray as xr
@@ -417,15 +413,15 @@ class MVSRegistration:
             pairs = None
 
         if 'dummy' in method:
-            from src.RegistrationMethodDummy import RegistrationMethodDummy
+            from src.registration_methods.RegistrationMethodDummy import RegistrationMethodDummy
             registration_method = RegistrationMethodDummy(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'feature' in method:
-            from src.RegistrationMethodFeatures import RegistrationMethodFeatures
+            from src.registration_methods.RegistrationMethodFeatures import RegistrationMethodFeatures
             registration_method = RegistrationMethodFeatures(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'cpd' in method:
-            from src.RegistrationMethodCPD import RegistrationMethodCPD
+            from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
             registration_method = RegistrationMethodCPD(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'ant' in method:
