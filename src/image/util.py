@@ -649,6 +649,10 @@ def normalise(sims, transform_key, use_global=True):
     return new_sims
 
 
+def get_sim_physical_size(sim):
+    return si_utils.get_shape_from_sim(sim, asarray=True) * si_utils.get_spacing_from_sim(sim, asarray=True)
+
+
 def calc_output_properties(sims, transform_key, z_scale=None):
     output_spacing = si_utils.get_spacing_from_sim(sims[0])
     if z_scale is not None:
@@ -714,3 +718,20 @@ def get_data_mapping(data, transform_key=None, transform=None, translation0=None
         rotation += rotation1
 
     return translation, rotation
+
+
+def validate_transform(transform, size):
+    if transform is None:
+        return False
+    if np.any(np.isnan(transform)):
+        return False
+    if np.any(np.isinf(transform)):
+        return False
+    if np.linalg.det(transform) == 0:
+        return False
+    translation, _ = get_translation_rotation_from_transform(transform)
+    while len(size) < len(translation):
+        size = list(size) + [0]
+    if np.any(np.abs(translation) > size):
+        return
+    return True

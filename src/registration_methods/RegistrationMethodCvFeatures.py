@@ -4,19 +4,28 @@ import numpy as np
 from sklearn.neighbors import KDTree
 from spatial_image import SpatialImage
 
-from src.image.util import show_image, uint8_image
+from src.image.ome_tiff_helper import save_tiff
+from src.image.util import uint8_image, int2float_image, get_sim_physical_size, validate_transform, show_image
 from src.registration_methods.RegistrationMethod import RegistrationMethod
 
 
-class RegistrationMethodFeatures(RegistrationMethod):
+class RegistrationMethodCvFeatures(RegistrationMethod):
     def __init__(self, source_type):
         super().__init__(source_type)
-        self.feature_model = cv.ORB_create()
+        #self.feature_model = cv.ORB_create()
+        self.feature_model = cv.SIFT_create()
 
-    def detect_features(self, data):
-        data = uint8_image(data.astype(self.source_type))
+    def detect_features(self, data0):
+        data = data0.astype(self.source_type)
+
+        data = uint8_image(data)
         kp, desc = self.feature_model.detectAndCompute(data, None)
         points = [kp1.pt for kp1 in kp]
+
+        image = cv.drawKeypoints(data, kp, None)
+        #show_image(image)
+        save_tiff(f'{id(data)}.tiff', image)
+
         if len(points) >= 2:
             tree = KDTree(points, leaf_size=2)
             dist, ind = tree.query(points, k=2)
@@ -24,9 +33,6 @@ class RegistrationMethodFeatures(RegistrationMethod):
         else:
             nn_distance = 1
 
-        #data = data.squeeze()
-        #image = cv.drawKeypoints(data, kp, data)
-        #show_image(image)
         return points, desc, nn_distance
 
     def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:
@@ -35,21 +41,23 @@ class RegistrationMethodFeatures(RegistrationMethod):
         nn_distance = np.mean([nn_distance1, nn_distance2])
 
         matcher = cv.BFMatcher()
-
-        # matches = matcher.match(fixed_desc, moving_desc)
+        #matches0 = matcher.match(fixed_desc, moving_desc)
         matches0 = matcher.knnMatch(fixed_desc, moving_desc, k=2)
+
         matches = []
         for m, n in matches0:
             if m.distance < 0.75 * n.distance:
                 matches.append(m)
+        #matches = [m for m, n in matches]
 
+        transform = None
         if len(matches) >= 4:
             fixed_points2 = np.float32([fixed_points[m.queryIdx] for m in matches])
             moving_points2 = np.float32([moving_points[m.trainIdx] for m in matches])
             transform, mask = cv.findHomography(fixed_points2, moving_points2, method=cv.USAC_MAGSAC,
                                                 ransacReprojThreshold=nn_distance)
-        else:
-            logging.error('Not enough matches for feature-based registration')
+        if not validate_transform(transform, get_sim_physical_size(fixed_data)):
+            logging.error('Unable to find feature-based registration')
             transform = np.eye(3)
 
         return {

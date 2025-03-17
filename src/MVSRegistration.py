@@ -311,8 +311,7 @@ class MVSRegistration:
 
     def validate_overlap(self, sims, labels, expect_large_overlap=False):
         overlaps = []
-        sim0 = sims[0]
-        size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
+        size = get_sim_physical_size(sims[0])
         normsize = np.linalg.norm(size)
         positions = [si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims]
         for index, position in enumerate(positions):
@@ -332,7 +331,6 @@ class MVSRegistration:
         sim0 = sims[0]
         ndims = si_utils.get_ndim_from_sim(sim0)
         source_type = sim0.dtype
-        size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
 
         operation = params['operation']
         method = params.get('method', '').lower()
@@ -407,6 +405,7 @@ class MVSRegistration:
             pairs = [(index, index + 1) for index in range(len(register_sims) - 1)]
         elif use_orthogonal_pairs:
             origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in register_sims])
+            size = get_sim_physical_size(sim0)
             pairs, _ = get_orthogonal_pairs(origins, size)
             logging.info(f'#pairs: {len(pairs)}')
         else:
@@ -417,8 +416,10 @@ class MVSRegistration:
             registration_method = RegistrationMethodDummy(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'feature' in method:
-            from src.registration_methods.RegistrationMethodFeatures import RegistrationMethodFeatures
-            registration_method = RegistrationMethodFeatures(source_type)
+            #from src.registration_methods.RegistrationMethodCvFeatures import RegistrationMethodCvFeatures
+            #registration_method = RegistrationMethodCvFeatures(source_type)
+            from src.registration_methods.RegistrationMethodSkFeatures import RegistrationMethodSkFeatures
+            registration_method = RegistrationMethodSkFeatures(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'cpd' in method:
             from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
@@ -589,8 +590,7 @@ class MVSRegistration:
             cvar = np.std(distances) / np.mean(distances)
             confidence = 1 - min(cvar / 10, 1)
         else:
-            sim0 = results['sims'][0]
-            size = si_utils.get_shape_from_sim(sim0, asarray=True) * si_utils.get_spacing_from_sim(sim0, asarray=True)
+            size = get_sim_physical_size(results['sims'][0])
             norm_distance = np.sum(distances) / np.linalg.norm(size)
             confidence = 1 - min(math.sqrt(norm_distance), 1)
 
