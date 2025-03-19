@@ -8,6 +8,7 @@ class RegistrationMethod(ABC):
 
     @abstractmethod
     def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:
+        # this returns the transform in pixel space
         # reg_func_transform = linalg.inv(params_transform) / spacing
         # params_transform = linalg.inv(reg_func_transform * spacing)
         return {

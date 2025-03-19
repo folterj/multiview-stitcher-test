@@ -280,7 +280,7 @@ def apply_transform(points, transform):
     for point in points:
         point_len = len(point)
         while len(point) < len(transform):
-            point = list(point) + [0]
+            point = list(point) + [1]
         new_point = np.dot(point, np.transpose(transform))
         new_points.append(new_point[:point_len])
     return new_points
@@ -289,6 +289,11 @@ def apply_transform(points, transform):
 def get_rotation_from_transform(transform):
     rotation = np.rad2deg(np.arctan2(transform[0][1], transform[0][0]))
     return rotation
+
+
+def get_scale_from_transform(transform):
+    scale = np.mean(np.linalg.norm(transform, axis=0)[:-1])
+    return scale
 
 
 def points_to_3d(points):

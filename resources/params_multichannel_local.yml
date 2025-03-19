@@ -21,7 +21,7 @@ operations:
     #filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
-    method: features #phase_correlation
+    method: phase_correlation
     output: D:/slides/EM04768_01_substrate_04/registered/reflection_stitched/
 
   - operation: register
@@ -32,7 +32,7 @@ operations:
     #filter_foreground: True
     normalisation: True
     use_orthogonal_pairs: True
-    method: features #phase_correlation
+    method: phase_correlation
     output: D:/slides/EM04768_01_substrate_04/registered/fluorescence_stitched/
 
   - operation: register

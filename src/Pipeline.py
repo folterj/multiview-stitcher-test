@@ -63,15 +63,15 @@ class Pipeline:
     def run_operation(self, params):
         operation = params['operation']
         filenames = dir_regex(params['input'])
-        verbose = self.params_general.get('verbose', False)
+        # sort last key first
+        filenames = sorted(filenames, key=lambda file: list(reversed(find_all_numbers(file))))
+        metadata_summary = self.params_general.get('metadata_summary', False)
         if len(filenames) == 0:
             logging.warning(f'Skipping operation {operation} (no files)')
             return
 
         operation_parts = operation.split()
         if 'match' in operation_parts:
-            # sort last key first
-            filenames = sorted(filenames, key=lambda file: list(reversed(find_all_numbers(get_filetitle(file)))))
             if len(operation_parts) > operation_parts.index('match') + 1:
                 match_label = operation_parts[-1]
             else:
@@ -91,9 +91,9 @@ class Pipeline:
             logging.info(f'# matched file sets: {len(filesets)}')
         else:
             filesets = [filenames]
-            fileset_labels = ['']
+            fileset_labels = [get_filetitle(filename) for filename in filenames]
 
-        if verbose:
+        if metadata_summary:
             for fileset, fileset_label in zip(filesets, fileset_labels):
                 logging.info(f'File set: {fileset_label} metadata:\n' + get_images_metadata(fileset))
 

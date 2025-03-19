@@ -416,14 +416,12 @@ class MVSRegistration:
             registration_method = RegistrationMethodDummy(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'feature' in method:
-            #from src.registration_methods.RegistrationMethodCvFeatures import RegistrationMethodCvFeatures
-            #registration_method = RegistrationMethodCvFeatures(source_type)
-            from src.registration_methods.RegistrationMethodSkFeatures import RegistrationMethodSkFeatures
-            registration_method = RegistrationMethodSkFeatures(source_type)
-            pairwise_reg_func = registration_method.registration
-        elif 'cpd' in method:
-            from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
-            registration_method = RegistrationMethodCPD(source_type)
+            if 'cv' in method:
+                from src.registration_methods.RegistrationMethodCvFeatures import RegistrationMethodCvFeatures
+                registration_method = RegistrationMethodCvFeatures(source_type)
+            else:
+                from src.registration_methods.RegistrationMethodSkFeatures import RegistrationMethodSkFeatures
+                registration_method = RegistrationMethodSkFeatures(source_type)
             pairwise_reg_func = registration_method.registration
         elif 'ant' in method:
             pairwise_reg_func = registration.registration_ANTsPy
@@ -595,10 +593,16 @@ class MVSRegistration:
             confidence = 1 - min(math.sqrt(norm_distance), 1)
 
         residual_errors = results['residual_errors']
-        residual_error = np.mean(list(residual_errors.values()))
+        if len(residual_errors) > 0:
+            residual_error = np.mean(list(residual_errors.values()))
+        else:
+            residual_error = 1
 
         registration_qualities = {key: value.item() for key, value in results['registration_qualities'].items()}
-        registration_quality = np.mean(list(registration_qualities.values()))
+        if len(registration_qualities) > 0:
+            registration_quality = np.mean(list(registration_qualities.values()))
+        else:
+            registration_quality = 0
 
         summary = (f'Residual error: {residual_error:.3f}'
                    f' Registration quality: {registration_quality:.3f}'

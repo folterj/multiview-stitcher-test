@@ -649,8 +649,11 @@ def normalise(sims, transform_key, use_global=True):
     return new_sims
 
 
-def get_sim_physical_size(sim):
-    return si_utils.get_shape_from_sim(sim, asarray=True) * si_utils.get_spacing_from_sim(sim, asarray=True)
+def get_sim_physical_size(sim, invert=False):
+    size = si_utils.get_shape_from_sim(sim, asarray=True) * si_utils.get_spacing_from_sim(sim, asarray=True)
+    if invert:
+        size = np.flip(size)
+    return size
 
 
 def calc_output_properties(sims, transform_key, z_scale=None):
@@ -672,7 +675,7 @@ def calc_output_properties(sims, transform_key, z_scale=None):
     return output_properties
 
 
-def get_translation_rotation_from_transform(transform, invert=False):
+def get_properties_from_transform(transform, invert=False):
     if len(transform.shape) == 3:
         transform = transform[0]
     if invert:
@@ -682,7 +685,8 @@ def get_translation_rotation_from_transform(transform, invert=False):
     if len(translation) == 2:
         translation = list(translation) + [0]
     rotation = get_rotation_from_transform(transform)
-    return translation, rotation
+    scale = get_scale_from_transform(transform)
+    return translation, rotation, scale
 
 
 def get_data_mapping(data, transform_key=None, transform=None, translation0=None, rotation=None):
@@ -708,19 +712,19 @@ def get_data_mapping(data, transform_key=None, transform=None, translation0=None
         translation = list(translation) + [z]
 
     if transform is not None:
-        translation1, rotation1 = get_translation_rotation_from_transform(transform, invert=True)
+        translation1, rotation1, _ = get_properties_from_transform(transform, invert=True)
         translation = np.array(translation) + translation1
         rotation += rotation1
 
     if transform_key is not None:
         transform1 = sim.transforms[transform_key]
-        translation1, rotation1 = get_translation_rotation_from_transform(transform1, invert=True)
+        translation1, rotation1, _ = get_properties_from_transform(transform1, invert=True)
         rotation += rotation1
 
     return translation, rotation
 
 
-def validate_transform(transform, size):
+def validate_transform(transform, size, max_scale=1.2):
     if transform is None:
         return False
     if np.any(np.isnan(transform)):
@@ -729,9 +733,9 @@ def validate_transform(transform, size):
         return False
     if np.linalg.det(transform) == 0:
         return False
-    translation, _ = get_translation_rotation_from_transform(transform)
-    while len(size) < len(translation):
-        size = list(size) + [0]
-    if np.any(np.abs(translation) > size):
+    translation, _, scale = get_properties_from_transform(transform)
+    if scale < 1 / max_scale or scale > max_scale:
+        return False
+    if np.any(np.abs(translation[:len(size)]) >= size):
         return
     return True
