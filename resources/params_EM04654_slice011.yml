@@ -17,8 +17,8 @@ general:
 
 operations:
   - operation: register match s
-    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-    input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
+    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
     source_metadata: source normalise
     normalisation: True
     use_orthogonal_pairs: True
@@ -26,8 +26,8 @@ operations:
     output: ../../../stitched/slice{s}/
 
   - operation: stack
-    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
-    input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
+    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
+    #input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
     source_metadata: source  #{'x': 0, 'y': 0}
     extra_metadata: {'scale': {'z': 0.05}}
     normalisation: False
