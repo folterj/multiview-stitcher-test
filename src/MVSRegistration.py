@@ -34,7 +34,7 @@ class MVSRegistration:
 
         logging.info(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
 
-    def run_operation(self, filenames, params):
+    def run_operation(self, filenames, params, global_rotation=None, global_center=None):
         operation = params['operation']
         overlap_threshold = params.get('overlap_threshold', 0.5)
         source_metadata = params.get('source_metadata', {})
@@ -84,7 +84,8 @@ class MVSRegistration:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        sims, positions, rotations = self.init_sims(filenames, params)
+        sims, positions, rotations = self.init_sims(filenames, params,
+                                                    global_rotation=global_rotation, global_center=global_center)
 
         with open(output + 'prereg_mappings.csv', 'w', newline='') as file:
             csvwriter = csv.writer(file)
@@ -231,12 +232,11 @@ class MVSRegistration:
 
             video.close()
 
-    def init_sims(self, filenames, params):
+    def init_sims(self, filenames, params, global_rotation=None, global_center=None):
         operation = params['operation']
         source_metadata = params.get('source_metadata', 'source')
         extra_metadata = params.get('extra_metadata', {})
         z_scale = extra_metadata.get('scale', {}).get('z', 1)
-        normalise_orientation = 'norm' in source_metadata
 
         sources = [create_source(file) for file in filenames]
         source0 = sources[0]
@@ -249,6 +249,7 @@ class MVSRegistration:
         is_3d = (source0.get_size_xyzct()[2] > 1)
 
         output_order = 'zyx' if is_stack or is_3d else 'yx'
+        ndims = len(output_order)
         if source0.get_nchannels() > 1:
             output_order += 'c'
 
@@ -269,14 +270,26 @@ class MVSRegistration:
             if last_z_position is not None and z_position != last_z_position:
                 different_z_positions = True
             translations.append(translation)
-            rotations.append(source.get_rotation())
+            if global_rotation is not None:
+                rotation = global_rotation
+            else:
+                rotation = source.get_rotation()
+            rotations.append(rotation)
             image = redimension_data(source.get_source_dask()[0], source.dimension_order, output_order)
             images.append(image)
             last_z_position = z_position
 
-        if normalise_orientation:
+        if 'norm' in source_metadata:
             size = np.array(source0.get_size()) * source0.get_pixel_size_micrometer()
-            translations, rotations = normalise_rotated_positions(translations, rotations, size)
+            center = None
+            if 'center' in source_metadata:
+                if 'global' in source_metadata:
+                    center = global_center
+                else:
+                    center = np.mean(translations, 0)
+            elif 'origin' in source_metadata:
+                center = np.zeros(ndims)
+            translations, rotations = normalise_rotated_positions(translations, rotations, size, center)
 
         #translations = [np.array(translation) * 1.25 for translation in translations]
 
@@ -293,7 +306,7 @@ class MVSRegistration:
             if increase_z_positions:
                 z_position += z_scale
             channel_labels = [channel.get('label', '') for channel in source.get_channels()]
-            if rotation is None or normalise_orientation:
+            if rotation is None or 'norm' in source_metadata:
                 transform = None
             else:
                 transform = param_utils.invert_coordinate_order(create_transform(translation, rotation))
@@ -311,20 +324,25 @@ class MVSRegistration:
 
     def validate_overlap(self, sims, labels, expect_large_overlap=False):
         overlaps = []
-        size = get_sim_physical_size(sims[0])
-        normsize = np.linalg.norm(size)
+        n = len(sims)
         positions = [si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims]
-        for index, position in enumerate(positions):
-            distances = [math.dist(position, pos) for index1, pos in enumerate(positions) if not index1 == index]
-            overlap = min(distances) / normsize
-            if overlap >= 1:
-                logging.warning(f'{labels[index]} has no overlap')
-                overlaps.append(False)
-            elif expect_large_overlap and overlap > 0.5:
-                logging.warning(f'{labels[index]} has small overlap')
-                overlaps.append(False)
-            else:
-                overlaps.append(True)
+        sizes = [np.linalg.norm(get_sim_physical_size(sim)) for sim in sims]
+        for i in range(n):
+            norm_dists = []
+            for j in range(i + 1, n):
+                distance = math.dist(positions[i], positions[j])
+                norm_dist = distance / np.mean([sizes[i], sizes[j]])
+                norm_dists.append(norm_dist)
+            if len(norm_dists) > 0:
+                norm_dist = min(norm_dists)
+                if norm_dist >= 1:
+                    logging.warning(f'{labels[i]} has no overlap')
+                    overlaps.append(False)
+                elif expect_large_overlap and norm_dist > 0.5:
+                    logging.warning(f'{labels[i]} has small overlap')
+                    overlaps.append(False)
+                else:
+                    overlaps.append(True)
         return overlaps
 
     def register(self, sims, params):

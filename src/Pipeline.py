@@ -1,5 +1,7 @@
 import logging
+import numpy as np
 import os
+import pandas as pd
 from tqdm import tqdm
 
 from src.image.source_helper import get_images_metadata
@@ -62,6 +64,7 @@ class Pipeline:
 
     def run_operation(self, params):
         operation = params['operation']
+        use_global_metadata = 'global' in params.get('source_metadata', '')
         filenames = dir_regex(params['input'])
         # sort last key first
         filenames = sorted(filenames, key=lambda file: list(reversed(find_all_numbers(file))))
@@ -93,11 +96,25 @@ class Pipeline:
             filesets = [filenames]
             fileset_labels = [get_filetitle(filename) for filename in filenames]
 
-        if metadata_summary:
+        metadatas = []
+        rotations = []
+        global_center = None
+        if metadata_summary or use_global_metadata:
             for fileset, fileset_label in zip(filesets, fileset_labels):
-                logging.info(f'File set: {fileset_label} metadata:\n' + get_images_metadata(fileset))
+                metadata = get_images_metadata(fileset)
+                if metadata_summary:
+                    logging.info(f'File set: {fileset_label} metadata:\n' + metadata['summary'])
+                metadatas.append(metadata)
+            if use_global_metadata:
+                global_center = np.mean([metadata['center'] for metadata in metadatas], 0)
+                rotations = [metadata['rotation'] for metadata in metadatas]
+                # fix missing rotation values
+                rotations = pd.Series(rotations).interpolate(limit_direction='both').to_numpy()
 
-        for fileset, fileset_label in zip(filesets, fileset_labels):
+        for index, (fileset, fileset_label) in enumerate(zip(filesets, fileset_labels)):
             if len(filesets) > 1:
                 logging.info(f'File set: {fileset_label}')
-            self.mvs_registration.run_operation(fileset, params)
+            center = global_center if use_global_metadata else None
+            rotation = rotations[index] if use_global_metadata else None
+            self.mvs_registration.run_operation(fileset, params,
+                                                global_center=center, global_rotation=rotation)

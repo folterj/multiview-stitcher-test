@@ -305,20 +305,17 @@ def convert_xyz_to_dict(xyz, axes='xyz'):
     return dct
 
 
-def normalise_rotated_positions(positions0, rotations0, size):
+def normalise_rotated_positions(positions0, rotations0, size, center):
     # in [xy(z)]
     positions = []
     rotations = []
-    positions_centre = np.mean(positions0, 0)
-    center_index = np.argmin([math.dist(position, positions_centre) for position in positions0])
-    center_position = positions0[center_index]
     pairs, angles = get_orthogonal_pairs(positions0, size)
     if len(pairs) > 0:
         mean_angle = np.mean(angles)
         for position0, rotation in zip(positions0, rotations0):
             if rotation is None:
                 rotation = -mean_angle
-            transform = create_transform(center=center_position, angle=-rotation, matrix_size=4)
+            transform = create_transform(center=center, angle=-rotation, matrix_size=4)
             position = apply_transform([position0], transform)[0]
             positions.append(position)
             rotations.append(rotation)

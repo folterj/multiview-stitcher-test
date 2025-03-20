@@ -224,6 +224,12 @@ class OmeSource:
             physical_size.append((np.multiply(size, pixel_size[0]), pixel_size[1]))
         return tuple(physical_size)
 
+    def get_physical_size_micrometer(self) -> tuple:
+        physical_size = []
+        for size, pixel_size in zip(self.get_size_xyzct(), self.get_pixel_size_micrometer()):
+            physical_size.append(np.multiply(size, pixel_size))
+        return tuple(physical_size)
+
     def get_pixel_type(self, level: int = 0) -> np.dtype:
         return self.pixel_types[level]
 
