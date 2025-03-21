@@ -203,9 +203,10 @@ def test5(sims, tmp_path):
     transform_key = 'stage_metadata'
     new_transform_key = 'registered'
 
-    from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
-    registration_method = RegistrationMethodCPD(sims[0].dtype)
-    pairwise_reg_func = registration_method.registration
+    #from src.registration_methods.RegistrationMethodCPD import RegistrationMethodCPD
+    #registration_method = RegistrationMethodCPD(sims[0].dtype)
+    #pairwise_reg_func = registration_method.registration
+    pairwise_reg_func = registration.phase_correlation_registration
 
     # register in 2D
     # pairs: pairwise consecutive views
@@ -222,7 +223,8 @@ def test5(sims, tmp_path):
     )
     progress.update()
     progress.close()
-    print(params)
+    for param in params:
+        print(param.data[0].tolist())
 
     # set 3D affine transforms from 2D registration params
     for index, sim in enumerate(sims):
@@ -232,6 +234,12 @@ def test5(sims, tmp_path):
 
     # continue with new transform key
     transform_key = new_transform_key
+
+    print(f'New transforms shape: {sims[0].transforms[new_transform_key].shape}')
+    progress = tqdm(desc='Plot', total=1)
+    vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=transform_key, use_positional_colors=False)
+    progress.update()
+    progress.close()
 
     z_scale = 0.5
 
@@ -256,6 +264,9 @@ def test5(sims, tmp_path):
     # because it does not take into account the correct input z spacing because of stacks of one z plane
     output_stack_properties['shape']['z'] = len(sims)
 
+    data_size = np.prod(list(output_stack_properties['shape'].values())) * sims[0].dtype.itemsize
+    print(f'Fused size {print_hbytes(data_size)}')
+
     progress = tqdm(desc='Fuse', total=1)
     # fuse all sims together using simple average fusion
     fused_image = fusion.fuse(
@@ -265,11 +276,6 @@ def test5(sims, tmp_path):
         output_chunksize={'z': 1, 'y': 1024, 'x': 1024},
         fusion_func=fusion.simple_average_fusion,
     )
-    progress.update()
-    progress.close()
-
-    progress = tqdm(desc='Plot', total=1)
-    vis_utils.plot_positions(reg_msims, transform_key=new_transform_key, use_positional_colors=False)
     progress.update()
     progress.close()
 
@@ -381,5 +387,5 @@ if __name__ == '__main__':
 
         path = Path('D:/slides/test_stack/')
         #create_stack(path, n=100)
-        test_create_stack(path, n=100)
-        #test_pipeline(path)
+        #test_create_stack(path, n=100)
+        test_pipeline(path)

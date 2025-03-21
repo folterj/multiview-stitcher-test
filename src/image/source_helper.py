@@ -22,6 +22,8 @@ def get_images_metadata(filenames):
     sizes = []
     centers = []
     rotations = []
+    positions = []
+    max_positions = []
     for filename in filenames:
         source = create_source(filename)
         size = source.get_physical_size_micrometer()
@@ -39,13 +41,24 @@ def get_images_metadata(filenames):
             size = list(size) + [0]
         center = np.array(position) + np.array(size) / 2
         centers.append(center)
+        positions.append(position)
+        max_positions.append(np.array(position) + np.array(size))
+    center = np.mean(centers, 0)
+    area = np.max(max_positions, 0) - np.min(positions, 0)
+    summary += f'Center: {tuple(center)} Area: {tuple(area)}\n'
 
     rotations2 = []
     for rotation, size in zip(rotations, sizes):
         if rotation is None:
             _, angles = get_orthogonal_pairs(centers, size)
-            rotation = -np.mean(angles)
-        rotations2.append(rotation)
-    return {'center': np.mean(centers, 0),
-            'rotation': np.mean(rotations2),
+            if len(angles) > 0:
+                rotation = -np.mean(angles)
+                rotations2.append(rotation)
+    if len(rotations2) > 0:
+        rotation = np.mean(rotations2)
+    else:
+        rotation = None
+    return {'center': center,
+            'area': area,
+            'rotation': rotation,
             'summary': summary}

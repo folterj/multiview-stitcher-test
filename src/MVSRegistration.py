@@ -15,7 +15,7 @@ import xarray as xr
 
 from src.Video import Video
 from src.image.flatfield import flatfield_correction
-from src.image.ome_helper import save_image
+from src.image.ome_helper import save_image, exists_output
 from src.image.ome_tiff_helper import save_tiff
 from src.image.source_helper import create_source
 from src.image.util import *
@@ -75,9 +75,11 @@ class MVSRegistration:
         parts = split_underscore_numeric(filenames[0])
         output_pattern = params['output'].format_map(parts)
         output = os.path.join(input_dir, output_pattern)    # preserve trailing slash: do not use os.path.normpath()
+        registered_fused_filename = output + 'registered'
+
         output_dir = os.path.dirname(output)
-        if not overwrite and (os.path.exists(output_dir) and os.listdir(output_dir)):
-            logging.warning(f'Skipping non-empty output directory {os.path.normpath(output_dir)}')
+        if not overwrite and exists_output(registered_fused_filename):
+            logging.warning(f'Skipping existing output {os.path.normpath(output_dir)}')
             return
         if clear:
             shutil.rmtree(output_dir, ignore_errors=True)
@@ -101,14 +103,13 @@ class MVSRegistration:
                 if self.verbose:
                     print('\t'.join(map(str, row)))
 
-        registered_fused_filename = output + 'registered'
         if len(filenames) == 1:
             logging.warning('Skipping registration (single image)')
             save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
                        params=output_params)
             return
 
-        overlaps = self.validate_overlap(sims, file_labels, is_stack or is_channel_overlay)
+        overlaps = self.validate_overlap(sims, file_labels, is_stack, is_stack or is_channel_overlay)
         overall_overlap = np.mean(overlaps)
         if overall_overlap < overlap_threshold:
             raise ValueError(f'Not enough overlap: {overall_overlap * 100:.1f}%')
@@ -133,6 +134,7 @@ class MVSRegistration:
                        params=output_params)
 
         results = self.register(sims, params)
+
         reg_result = results['reg_result']
         sims = results['sims']
         mappings = results['mappings']
@@ -173,12 +175,6 @@ class MVSRegistration:
                 if self.verbose:
                     print('\t'.join(map(str, row)))
 
-        fused_image = self.fuse(sims, mappings, params)
-        logging.info('Saving fused image...')
-        save_image(registered_fused_filename, fused_image,
-                   transform_key=self.reg_transform_key, channels=channels, translation0=positions[0],
-                   params=output_params)
-
         # plot the image configuration after registration
         logging.info('Plotting images...')
         registered_positions_filename = output + 'positions_registered.pdf'
@@ -197,6 +193,12 @@ class MVSRegistration:
             figure, axes = summary_plot
             summary_plot_filename = output + 'groupwise_resolution.pdf'
             figure.savefig(summary_plot_filename)
+
+        fused_image = self.fuse(sims, mappings, params)
+        logging.info('Saving fused image...')
+        save_image(registered_fused_filename, fused_image,
+                   transform_key=self.reg_transform_key, channels=channels, translation0=positions[0],
+                   params=output_params)
 
         if is_transition:
             logging.info('Creating transition...')
@@ -322,19 +324,31 @@ class MVSRegistration:
             sims.append(sim.chunk({'y': 1024, 'x': 1024}))
         return sims, translations, rotations
 
-    def validate_overlap(self, sims, labels, expect_large_overlap=False):
+    def validate_overlap(self, sims, labels, is_stack=False, expect_large_overlap=False):
         overlaps = []
         n = len(sims)
         positions = [si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims]
         sizes = [np.linalg.norm(get_sim_physical_size(sim)) for sim in sims]
+        if self.verbose:
+            print('Overlap:')
         for i in range(n):
             norm_dists = []
-            for j in range(i + 1, n):
-                distance = math.dist(positions[i], positions[j])
-                norm_dist = distance / np.mean([sizes[i], sizes[j]])
-                norm_dists.append(norm_dist)
+            if is_stack:
+                if i + 1 < n:
+                    compare_indices = [i + 1]
+                else:
+                    compare_indices = []
+            else:
+                compare_indices = range(n)
+            for j in compare_indices:
+                if not j == i:
+                    distance = math.dist(positions[i], positions[j])
+                    norm_dist = distance / np.mean([sizes[i], sizes[j]])
+                    norm_dists.append(norm_dist)
             if len(norm_dists) > 0:
                 norm_dist = min(norm_dists)
+                if self.verbose:
+                    print(f'{labels[i]} norm distance: {norm_dist:.3f}')
                 if norm_dist >= 1:
                     logging.warning(f'{labels[i]} has no overlap')
                     overlaps.append(False)
@@ -519,6 +533,13 @@ class MVSRegistration:
             progress.update()
             progress.close()
 
+        if is_stack:
+            # set 3D affine transforms from 2D registration params
+            for index, sim in enumerate(sims):
+                affine_3d = param_utils.identity_transform(ndim=3)
+                affine_3d.loc[{dim: mappings[index].coords[dim] for dim in mappings[index].sel(t=0).dims}] = mappings[index].sel(t=0)
+                si_utils.set_sim_affine(sim, affine_3d, transform_key=self.reg_transform_key, base_transform_key=self.source_transform_key)
+
         return {'reg_result': reg_result,
                 'mappings': mappings_dict,
                 'residual_errors': residual_error_dict,
@@ -542,12 +563,6 @@ class MVSRegistration:
                 output_chunksize[dim] = 1
 
         if is_stack:
-            # set 3D affine transforms from 2D registration params
-            for index, sim in enumerate(sims):
-                affine_3d = param_utils.identity_transform(ndim=3)
-                affine_3d.loc[{dim: mappings[index].coords[dim] for dim in mappings[index].sel(t=0).dims}] = mappings[index].sel(t=0)
-                si_utils.set_sim_affine(sim, affine_3d, transform_key=self.reg_transform_key, base_transform_key=self.source_transform_key)
-
             output_stack_properties = calc_output_properties(sims, self.reg_transform_key, z_scale=z_scale)
             # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
             # because it does not take into account the correct input z spacing because of stacks of one z plane

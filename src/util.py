@@ -309,19 +309,14 @@ def normalise_rotated_positions(positions0, rotations0, size, center):
     # in [xy(z)]
     positions = []
     rotations = []
-    pairs, angles = get_orthogonal_pairs(positions0, size)
-    if len(pairs) > 0:
-        mean_angle = np.mean(angles)
-        for position0, rotation in zip(positions0, rotations0):
-            if rotation is None:
-                rotation = -mean_angle
-            transform = create_transform(center=center, angle=-rotation, matrix_size=4)
-            position = apply_transform([position0], transform)[0]
-            positions.append(position)
-            rotations.append(rotation)
-    else:
-        positions = positions0
-        rotations = rotations0
+    _, angles = get_orthogonal_pairs(positions0, size)
+    for position0, rotation in zip(positions0, rotations0):
+        if rotation is None and len(angles) > 0:
+            rotation = -np.mean(angles)
+        transform = create_transform(center=center, angle=-rotation, matrix_size=4)
+        position = apply_transform([position0], transform)[0]
+        positions.append(position)
+        rotations.append(rotation)
     return positions, rotations
 
 

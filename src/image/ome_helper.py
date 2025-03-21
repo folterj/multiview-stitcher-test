@@ -42,3 +42,7 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     if 'tif' in params.get('format', 'tif'):
         save_ome_tiff(f'{filename}.ome.tiff', sim.data, dimension_order, pixel_size,
                       channels, positions, rotation, tile_size=tile_size, compression=compression, scaler=scaler)
+
+
+def exists_output(path):
+    return os.path.exists(path + '.ome.zarr') or os.path.exists(path + '.ome.tiff')
