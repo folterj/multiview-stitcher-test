@@ -267,6 +267,8 @@ def create_transform0(center=(0, 0), angle=0, scale=1, translate=(0, 0)):
 def create_transform(center, angle, matrix_size=3):
     if len(center) == 2:
         center = np.array(list(center) + [0])
+    if angle is None:
+        angle = 0
     r = Rotation.from_euler('z', angle, degrees=True)
     t = center - r.apply(center, inverse=True)
     transform = np.eye(matrix_size)

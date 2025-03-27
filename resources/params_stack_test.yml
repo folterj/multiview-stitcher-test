@@ -2,24 +2,23 @@ general:
   log_filename: log/multiview-stitcher-test.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
-  show_filtered: False
-  break_on_error: False
+  break_on_error: True
   verbose: True
   verbose_mvs: False
+  metadata_summary: True
   output:
-    clear: True
+    clear: False
+    overwrite: True
     format: ome.tiff
-    tile_size: []
+    tile_size: [1024, 1024]
     compression: []
     npyramid_add: 4
     pyramid_downsample: 2
 
 operations:
   - operation: stack
-    input: D:/slides/EM04788_02_Sub_02/10nm/subset/*.tif
-    source_metadata: {'x': 0, 'y': 0}
-    extra_metadata: {'scale': {'z': 0.05}}
-    normalisation: True
-    use_rotation: True
-    method: cpd #features
+    input: D:/slides/EM04654_slice011/subset_small/*.ome.tif
+    source_metadata: source
+    normalisation: False
+    method: phase_correlation
     output: aligned/

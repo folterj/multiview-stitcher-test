@@ -8,7 +8,7 @@ general:
   metadata_summary: True
   output:
     clear: False
-    overwrite: False
+    overwrite: True
     format: ome.tiff
     tile_size: [1024, 1024]
     compression: []
@@ -19,19 +19,19 @@ operations:
   - operation: register match s
     #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
     #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
-    input: D:/slides/EM04654_slice011/tiles_slice20_22/g????/t????/*.ome.tif
+    input: D:/slides/EM04654_slice011/tiles_slice21_24/g????/t????/*.ome.tif
     source_metadata: source normalise global center
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: ../../../stitched20_22/slice{s}/
+    output: ../../../stitched21_24/slice{s}/
 
   - operation: stack
     #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
     #input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
-    input: D:/slides/EM04654_slice011/stitched20_22/slice?????/registered.ome.tiff
+    input: D:/slides/EM04654_slice011/stitched21_24/slice?????/registered.ome.tiff
     source_metadata: source  #{'x': 0, 'y': 0}
-    extra_metadata: {'scale': {'z': 0.05}}
+    extra_metadata: {'scale': {'z': 0.1}}
     normalisation: False
     method: phase_correlation
-    output: ../../aligned20_22/
+    output: ../../aligned21_24/

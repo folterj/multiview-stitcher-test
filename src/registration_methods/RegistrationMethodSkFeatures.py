@@ -16,11 +16,6 @@ from src.registration_methods.RegistrationMethod import RegistrationMethod
 
 
 class RegistrationMethodSkFeatures(RegistrationMethod):
-    def __init__(self, source_type):
-        super().__init__(source_type)
-        self.feature_model = SIFT(c_dog=0.1 / 3)
-        #self.feature_model = ORB()
-
     def detect_features(self, data0):
         data = data0.astype(self.source_type)
 
@@ -28,9 +23,11 @@ class RegistrationMethodSkFeatures(RegistrationMethod):
         scale = min(1000 / np.linalg.norm(data.shape), 1)
         data = rescale(data, scale)
 
-        self.feature_model.detect_and_extract(data)
-        points = np.flip(self.feature_model.keypoints, axis=-1) / scale     # rescale and convert to (z)yx
-        desc = self.feature_model.descriptors
+        #feature_model = ORB()
+        feature_model = SIFT(c_dog=0.1 / 3)
+        feature_model.detect_and_extract(data)
+        points = np.flip(feature_model.keypoints, axis=-1) / scale     # rescale and convert to (z)yx
+        desc = feature_model.descriptors
 
         if len(points) >= 2:
             tree = KDTree(points, leaf_size=2)
@@ -43,8 +40,8 @@ class RegistrationMethodSkFeatures(RegistrationMethod):
 
     def registration(self, fixed_data: SpatialImage, moving_data: SpatialImage, **kwargs) -> dict:
         min_samples = 5
-        fixed_points, fixed_desc, nn_distance1 = self.detect_features(fixed_data.data)
-        moving_points, moving_desc, nn_distance2 = self.detect_features(moving_data.data)
+        fixed_points, fixed_desc, nn_distance1 = self.detect_features(fixed_data)
+        moving_points, moving_desc, nn_distance2 = self.detect_features(moving_data)
         threshold = np.mean([nn_distance1, nn_distance2])
 
         matches = match_descriptors(fixed_desc, moving_desc, cross_check=True, max_ratio=0.92)

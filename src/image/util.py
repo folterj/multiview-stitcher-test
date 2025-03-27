@@ -4,8 +4,8 @@ import tifffile
 from scipy.ndimage import gaussian_filter
 from skimage.transform import downscale_local_mean
 from tifffile import TiffFile
+from xarray import DataTree
 
-from multiscale_spatial_image import MultiscaleSpatialImage
 from multiview_stitcher import msi_utils, param_utils, fusion
 from multiview_stitcher import spatial_image_utils as si_utils
 
@@ -577,7 +577,7 @@ def detect_area_points(image):
     threshold = -5
     contours = []
     while len(contours) <= 1 and threshold <= 255:
-        _, binimage = cv.threshold(uint8_image(image), threshold, 255, method)
+        _, binimage = cv.threshold(np.array(uint8_image(image)), threshold, 255, method)
         contours0 = cv.findContours(binimage, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
         contours = contours0[0] if len(contours0) == 2 else contours0[1]
         method = cv.THRESH_BINARY
@@ -693,7 +693,7 @@ def get_data_mapping(data, transform_key=None, transform=None, translation0=None
     if rotation is None:
         rotation = 0
 
-    if isinstance(data, MultiscaleSpatialImage):
+    if isinstance(data, DataTree):
         sim = msi_utils.get_sim_from_msim(data)
     else:
         sim = data

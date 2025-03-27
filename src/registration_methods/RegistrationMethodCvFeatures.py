@@ -11,18 +11,15 @@ from src.registration_methods.RegistrationMethod import RegistrationMethod
 
 
 class RegistrationMethodCvFeatures(RegistrationMethod):
-    def __init__(self, source_type):
-        super().__init__(source_type)
-        self.feature_model = cv.SIFT_create(contrastThreshold=0.1)
-        #self.feature_model = cv.ORB_create(patchSize=8, edgeThreshold=8)
-
     def detect_features(self, data0):
         data = data0.astype(self.source_type)
 
         data = uint8_image(data)
         scale = min(1000 / np.linalg.norm(data.shape), 1)
         data = cv.resize(data, (0, 0), fx=scale, fy=scale)
-        keypoints, desc = self.feature_model.detectAndCompute(data, None)
+        feature_model = cv.SIFT_create(contrastThreshold=0.1)
+        #feature_model = cv.ORB_create(patchSize=8, edgeThreshold=8)
+        keypoints, desc = feature_model.detectAndCompute(data, None)
         points = [np.array(keypoint.pt) / scale for keypoint in keypoints]
 
         if len(points) >= 2:
