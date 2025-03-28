@@ -106,7 +106,7 @@ class MVSRegistration:
         if len(filenames) == 1:
             logging.warning('Skipping registration (single image)')
             save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
-                       params=output_params)
+                       params=output_params, verbose=self.verbose)
             return
 
         overlaps = self.validate_overlap(sims, file_labels, is_stack, is_stack or is_channel_overlay)
@@ -118,17 +118,28 @@ class MVSRegistration:
             # before registration:
             logging.info('Plotting images...')
             original_positions_filename = output + 'positions_original.pdf'
+
+            if self.verbose:
+                progress = tqdm(desc='Plotting original', total=1)
             vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.source_transform_key,
                                      use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                      show_plot=self.verbose, output_filename=original_positions_filename)
+            if self.verbose:
+                progress.update()
+                progress.close()
 
             logging.info('Fusing original...')
+            if self.verbose:
+                progress = tqdm(desc='Fusing original', total=1)
             if is_stack:
                 sims2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
             else:
                 sims2d = sims
-
             original_fused = fusion.fuse(sims2d, transform_key=self.source_transform_key)
+            if self.verbose:
+                progress.update()
+                progress.close()
+
             original_fused_filename = output + 'original'
             save_image(original_fused_filename, original_fused, transform_key=self.source_transform_key,
                        params=output_params)
@@ -179,9 +190,14 @@ class MVSRegistration:
         # plot the image configuration after registration
         logging.info('Plotting images...')
         registered_positions_filename = output + 'positions_registered.pdf'
+        if self.verbose:
+            progress = tqdm(desc='Plotting registered', total=1)
         vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.reg_transform_key,
                                  use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
+        if self.verbose:
+            progress.update()
+            progress.close()
 
         summary_plot = reg_result.get('pairwise_registration', {}).get('summary_plot')
         if summary_plot is not None:
@@ -199,7 +215,7 @@ class MVSRegistration:
         logging.info('Saving fused image...')
         save_image(registered_fused_filename, fused_image,
                    transform_key=self.reg_transform_key, channels=channels, translation0=positions[0],
-                   params=output_params)
+                   params=output_params, verbose=self.verbose)
 
         if is_transition:
             logging.info('Creating transition...')
@@ -571,6 +587,9 @@ class MVSRegistration:
             if dim not in output_chunksize:
                 output_chunksize[dim] = 1
 
+        if self.verbose:
+            progress = tqdm(desc='Fusing registered', total=1)
+
         if is_stack:
             output_stack_properties = calc_output_properties(sims, self.reg_transform_key, z_scale=z_scale)
             # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
@@ -618,6 +637,11 @@ class MVSRegistration:
                 transform_key=self.reg_transform_key,
                 output_chunksize=output_chunksize,
             )
+
+        if self.verbose:
+            progress.update()
+            progress.close()
+
         return fused_image
 
     def calc_metrics(self, results):

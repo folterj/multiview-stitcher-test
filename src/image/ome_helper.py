@@ -1,4 +1,5 @@
 from ome_zarr.scale import Scaler
+from tqdm import tqdm
 
 from src.image.ome_ngff_helper import save_ome_ngff
 from src.image.ome_tiff_helper import save_ome_tiff
@@ -6,7 +7,7 @@ from src.image.ome_zarr_helper import save_ome_zarr
 from src.image.util import *
 
 
-def save_image(filename, sim, transform_key=None, channels=None, translation0=None, params={}):
+def save_image(filename, sim, transform_key=None, channels=None, translation0=None, params={}, verbose=False):
     dimension_order = ''.join(sim.dims)
     sdims = ''.join(si_utils.get_spatial_dims_from_sim(sim))
     sdims = sdims.replace('zyx', 'xyz').replace('yx', 'xy')   # order xy(z)
@@ -35,13 +36,23 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
 
     if 'zar' in params.get('format', 'zar'):
+        if verbose:
+            progress = tqdm(desc='Saving zarr', total=1)
         #save_ome_zarr(f'{filename}.ome.zarr', sim.data, dimension_order, pixel_size,
         #              channels, position, rotation, compression=compression, scaler=scaler)
         save_ome_ngff(f'{filename}.ome.zarr', sim, channels, position, rotation,
                       pyramid_downsample=pyramid_downsample)
+        if verbose:
+            progress.update()
+            progress.close()
     if 'tif' in params.get('format', 'tif'):
+        if verbose:
+            progress = tqdm(desc='Saving tiff', total=1)
         save_ome_tiff(f'{filename}.ome.tiff', sim.data, dimension_order, pixel_size,
                       channels, positions, rotation, tile_size=tile_size, compression=compression, scaler=scaler)
+        if verbose:
+            progress.update()
+            progress.close()
 
 
 def exists_output(path):
