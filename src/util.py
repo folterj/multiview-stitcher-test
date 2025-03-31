@@ -315,7 +315,8 @@ def normalise_rotated_positions(positions0, rotations0, size, center):
     for position0, rotation in zip(positions0, rotations0):
         if rotation is None and len(angles) > 0:
             rotation = -np.mean(angles)
-        transform = create_transform(center=center, angle=-rotation, matrix_size=4)
+        angle = -rotation if rotation is not None else None
+        transform = create_transform(center=center, angle=angle, matrix_size=4)
         position = apply_transform([position0], transform)[0]
         positions.append(position)
         rotations.append(rotation)

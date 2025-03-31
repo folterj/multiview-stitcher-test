@@ -1,6 +1,7 @@
 from ome_zarr.scale import Scaler
 from tqdm import tqdm
 
+from src.constants import zarr_extension, tiff_extension
 from src.image.ome_ngff_helper import save_ome_ngff
 from src.image.ome_tiff_helper import save_ome_tiff
 from src.image.ome_zarr_helper import save_ome_zarr
@@ -38,9 +39,10 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     if 'zar' in params.get('format', 'zar'):
         if verbose:
             progress = tqdm(desc='Saving zarr', total=1)
-        #save_ome_zarr(f'{filename}.ome.zarr', sim.data, dimension_order, pixel_size,
-        #              channels, position, rotation, compression=compression, scaler=scaler)
-        save_ome_ngff(f'{filename}.ome.zarr', sim, channels, position, rotation,
+        #save_ome_zarr(filename + zarr_extension, sim.data, dimension_order, pixel_size,
+        #              channels, position, rotation, compression=compression, scaler=scaler,
+        #              zarr_version=3, ome_version='0.5')
+        save_ome_ngff(filename + zarr_extension, sim, channels, position, rotation,
                       pyramid_downsample=pyramid_downsample)
         if verbose:
             progress.update()
@@ -48,7 +50,7 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     if 'tif' in params.get('format', 'tif'):
         if verbose:
             progress = tqdm(desc='Saving tiff', total=1)
-        save_ome_tiff(f'{filename}.ome.tiff', sim.data, dimension_order, pixel_size,
+        save_ome_tiff(filename + tiff_extension, sim.data, dimension_order, pixel_size,
                       channels, positions, rotation, tile_size=tile_size, compression=compression, scaler=scaler)
         if verbose:
             progress.update()
@@ -56,4 +58,4 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
 
 
 def exists_output(path):
-    return os.path.exists(path + '.ome.zarr') or os.path.exists(path + '.ome.tiff')
+    return os.path.exists(path + zarr_extension) or os.path.exists(path + tiff_extension)

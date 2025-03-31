@@ -32,7 +32,7 @@ class MVSRegistration:
         self.reg_transform_key = 'registered'
         self.transition_transform_key = 'transition'
 
-        logging.info(f'Multiview-stitcher Version: {multiview_stitcher.__version__}')
+        logging.info(f'Multiview-stitcher version: {multiview_stitcher.__version__}')
 
     def run_operation(self, filenames, params, global_rotation=None, global_center=None):
         operation = params['operation']

@@ -4,6 +4,7 @@ import os
 import pandas as pd
 from tqdm import tqdm
 
+from src.constants import version
 from src.image.source_helper import get_images_metadata
 from src.util import dir_regex, get_filetitle, find_all_numbers, split_underscore_numeric
 
@@ -45,6 +46,8 @@ class Pipeline:
 
         for module in ['ome_zarr']:
             logging.getLogger(module).setLevel(logging.WARNING)
+
+        logging.info(f'muvis-align version {version}')
 
     def run(self):
         break_on_error = self.params_general.get('break_on_error', False)
