@@ -218,13 +218,19 @@ def split_value_unit_list(text: str) -> list:
 
 
 def get_value_units_micrometer(value_units0: list) -> list:
-    conversions = {'nm': 1e-3, 'µm': 1, 'um': 1, 'micrometer': 1, 'mm': 1e3, 'cm': 1e4, 'm': 1e6}
+    conversions = {
+        'nm': 1e-3,
+        'µm': 1, 'um': 1, 'micrometer': 1,
+        'mm': 1e3, 'millimeter': 1e3,
+        'cm': 1e4, 'centimeter': 1e4,
+        'm': 1e6, 'meter': 1e6
+    }
     if value_units0 is None:
         return None
 
     values_um = []
     for value_unit in value_units0:
-        if not (isinstance(value_unit, int) or isinstance(value_unit, float)):
+        if isinstance(value_unit, (list, tuple)):
             value_um = value_unit[0] * conversions.get(value_unit[1], 1)
         else:
             value_um = value_unit
@@ -234,7 +240,10 @@ def get_value_units_micrometer(value_units0: list) -> list:
 
 def convert_rational_value(value) -> float:
     if value is not None and isinstance(value, tuple):
-        value = value[0] / value[1]
+        if value[0] == value[1]:
+            value = value[0]
+        else:
+            value = value[0] / value[1]
     return value
 
 

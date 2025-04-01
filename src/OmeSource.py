@@ -139,11 +139,6 @@ class OmeSource:
                                 rotation = np.rad2deg(rotation)
         self.rotation = rotation
 
-        self.source_mag = 0
-        objective_id = images.get('ObjectiveSettings', {}).get('ID', '')
-        for objective in ensure_list(self.metadata.get('Instrument', {}).get('Objective', [])):
-            if objective.get('ID', '') == objective_id:
-                self.source_mag = float(objective.get('NominalMagnification', 0))
         nchannels = self.get_nchannels()
         channels = []
         for channel0 in ensure_list(pixels.get('Channel', [])):
@@ -180,13 +175,6 @@ class OmeSource:
         if 0 < len(self.target_pixel_size) < 2:
             self.target_pixel_size.append(self.target_pixel_size[0])
 
-        # set source mags
-        self.source_mags = [self.source_mag]
-        for i, size in enumerate(self.sizes):
-            if i > 0:
-                mag = self.source_mag * np.mean(np.divide(size, self.sizes[0]))
-                self.source_mags.append(check_round_significants(mag, 3))
-
         if self.target_pixel_size:
             self.best_level, self.best_factor, self.full_factor = get_best_level_factor(self, self.target_pixel_size)
         else:
@@ -207,13 +195,6 @@ class OmeSource:
 
     def get_source_dask(self):
         raise NotImplementedError('Implement method in subclass')
-
-    def get_mag(self) -> float:
-        mag = self.source_mag
-        # get effective mag at target pixel size
-        if self.target_pixel_size:
-            mag *= np.mean(self.full_factor)
-        return check_round_significants(mag, 3)
 
     def get_dimension_order(self) -> str:
         return self.output_dimension_order

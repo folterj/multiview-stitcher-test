@@ -43,7 +43,11 @@ class OmeZarrSource(OmeSource):
             nodes = list(reader())
             # first node will be the image pixel data
             if len(nodes) == 0:
-                raise FileNotFoundError(f'No image data found in ome-zarr file {filename}')
+                # try to read bioformats2raw format: look for '0' path
+                reader = Reader(parse_url(filename + '/0'))
+                nodes = list(reader())
+                if len(nodes) == 0:
+                    raise FileNotFoundError(f'No image data found in ome-zarr file {filename}')
             image_node = nodes[0]
 
             self.metadata = image_node.metadata
@@ -125,7 +129,6 @@ class OmeZarrSource(OmeSource):
                 channels = [{'label': ''}] * nchannels
         self.source_pixel_size = pixel_size
         self.channels = channels
-        self.source_mag = 0
         self.position = position
 
     def get_source_dask(self):

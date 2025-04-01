@@ -131,6 +131,7 @@ class TiffSource(OmeSource):
 
     def _find_metadata(self):
         pixel_size = []
+        res_unit = ''
         # from OME metadata
         if self.has_ome_metadata:
             self._get_ome_metadata()
@@ -159,29 +160,27 @@ class TiffSource(OmeSource):
             pixel_size.append((self.metadata['MPP'], self.default_physical_unit))
         # from page TAGS
         if len(pixel_size) < 2:
-            pixel_size_unit = self.tags.get('ResolutionUnit', '')
-            if isinstance(pixel_size_unit, Enum):
-                pixel_size_unit = pixel_size_unit.name
-            pixel_size_unit = pixel_size_unit.lower()
-            if pixel_size_unit == 'none':
-                pixel_size_unit = ''
+            res_unit = self.tags.get('ResolutionUnit', '')
+            if isinstance(res_unit, Enum):
+                res_unit = res_unit.name
+            res_unit = res_unit.lower()
+            if res_unit == 'none':
+                res_unit = ''
             res0 = convert_rational_value(self.tags.get('XResolution'))
             if res0 is not None and res0 != 0:
-                pixel_size.append((1 / res0, pixel_size_unit))
+                pixel_size.append((1 / res0, res_unit))
             res0 = convert_rational_value(self.tags.get('YResolution'))
             if res0 is not None and res0 != 0:
-                pixel_size.append((1 / res0, pixel_size_unit))
+                pixel_size.append((1 / res0, res_unit))
 
         position = []
         xpos = convert_rational_value(self.tags.get('XPosition'))
         ypos = convert_rational_value(self.tags.get('YPosition'))
         if xpos is not None and ypos is not None:
-            position = [(xpos, pixel_size_unit), (ypos, pixel_size_unit)]
+            position = [(xpos, res_unit), (ypos, res_unit)]
 
         if pixel_size_z is not None and len(pixel_size) == 2:
             pixel_size.append(pixel_size_z)
-
-        mag = self.metadata.get('Mag', self.metadata.get('AppMag', 0))
 
         nchannels = self.get_nchannels()
         photometric = str(self.metadata.get('PhotometricInterpretation', '')).lower().split('.')[-1]
@@ -191,7 +190,6 @@ class TiffSource(OmeSource):
             channels = [{'label': photometric}] * nchannels
 
         self.source_pixel_size = pixel_size
-        self.source_mag = mag
         self.channels = channels
         self.position = position
 
