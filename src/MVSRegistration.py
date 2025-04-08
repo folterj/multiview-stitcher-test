@@ -7,8 +7,10 @@ from dask.diagnostics import ProgressBar
 import json
 import logging
 import multiview_stitcher
-from multiview_stitcher import registration, vis_utils
+from multiview_stitcher import registration, msi_utils, vis_utils
+from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
+from multiview_stitcher.registration import get_overlap_bboxes
 import shutil
 from tqdm import tqdm
 import xarray as xr
@@ -19,6 +21,7 @@ from src.image.ome_helper import save_image, exists_output
 from src.image.ome_tiff_helper import save_tiff
 from src.image.source_helper import create_source
 from src.image.util import *
+from src.metrics import calc_frc
 from src.util import *
 
 
@@ -149,23 +152,20 @@ class MVSRegistration:
 
         reg_result = results['reg_result']
         sims = results['sims']
-        mappings = results['mappings']
-        mappings2 = {file_labels[index]: mapping.data[0].tolist() for index, mapping in mappings.items()}
-        results['residual_errors'] = {file_labels[key[0]] + ' - ' + file_labels[key[1]]: value for key, value in results['residual_errors'].items()}
-        results['registration_qualities'] = {file_labels[key[0]] + ' - ' + file_labels[key[1]]: value for key, value in results['registration_qualities'].items()}
 
-        metrics = self.calc_metrics(results)
+        metrics = self.calc_metrics(results, file_labels)
+        mappings = metrics['mappings']
 
         logging.info(metrics['summary'])
         with open(output + 'metrics.json', 'w') as file:
             json.dump(metrics, file, indent=4)
 
         with open(output + 'mappings.json', 'w') as file:
-            json.dump(mappings2, file, indent=4)
+            json.dump(mappings, file, indent=4)
 
         if self.verbose:
             print('Mappings:')
-            for key, value in mappings2.items():
+            for key, value in mappings.items():
                 print(f'{key}: {value}')
 
         with open(output + 'mappings.csv', 'w', newline='') as file:
@@ -174,7 +174,7 @@ class MVSRegistration:
             csvwriter.writerow(header)
             if self.verbose:
                 print('\t'.join(header))
-            for sim, (label, mapping), position, rotation in zip(sims, mappings2.items(), positions, rotations):
+            for sim, (label, mapping), position, rotation in zip(sims, mappings.items(), positions, rotations):
                 if not normalise_orientation:
                     # rotation already in msim affine transform
                     rotation = None
@@ -471,7 +471,7 @@ class MVSRegistration:
             pairwise_reg_func = registration.registration_ANTsPy
         else:
             pairwise_reg_func = registration.phase_correlation_registration
-        logging.info(f'Registration method: {pairwise_reg_func.__name__}')
+        logging.info(f'Registration method: {method}')
 
         if use_rotation:
             pairwise_reg_func_kwargs = {
@@ -564,7 +564,8 @@ class MVSRegistration:
                 'mappings': mappings_dict,
                 'residual_errors': residual_error_dict,
                 'registration_qualities': registration_qualities_dict,
-                'sims': sims}
+                'sims': sims,
+                'pairs': pairs}
 
     def fuse(self, sims, params):
         operation = params['operation']
@@ -644,11 +645,57 @@ class MVSRegistration:
 
         return fused_image
 
-    def calc_metrics(self, results):
-        mappings = results['mappings']
-        distances = [np.linalg.norm(param_utils.translation_from_affine(mapping.data[0]))
-                     for mapping in mappings.values()]
+    def calc_resolution_metric(self, results):
+        metrics = {}
+        sims = results['sims']
+        pairs = results['pairs']
+        if pairs is None:
+            origins = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims])
+            size = get_sim_physical_size(sims[0])
+            pairs, _ = get_orthogonal_pairs(origins, size)
+        for pair in pairs:
+            overlap_sims = self.get_overlap_images((sims[pair[0]], sims[pair[1]]))
+            metrics[pair] = calc_frc(overlap_sims[0], overlap_sims[1])
+        return metrics
 
+    def get_overlap_images(self, sims):
+        # functionality copied from registration.register_pair_of_msims()
+        spatial_dims = si_utils.get_spatial_dims_from_sim(sims[0])
+        overlap_tolerance = {dim: 0.0 for dim in spatial_dims}
+        lowers, uppers = get_overlap_bboxes(
+            sims[0],
+            sims[1],
+            input_transform_key=self.reg_transform_key,
+            output_transform_key=None,
+            overlap_tolerance=overlap_tolerance,
+        )
+
+        reg_sims_spacing = [
+            si_utils.get_spacing_from_sim(sim) for sim in sims
+        ]
+
+        tol = 1e-6
+        overlaps_sims = [
+            sim.sel(
+                {
+                    # add spacing to include bounding pixels
+                    dim: slice(
+                        lowers[isim][idim] - tol - reg_sims_spacing[isim][dim],
+                        uppers[isim][idim] + tol + reg_sims_spacing[isim][dim],
+                    )
+                    for idim, dim in enumerate(spatial_dims)
+                },
+            )
+            for isim, sim in enumerate(sims)
+        ]
+        return overlaps_sims
+
+    def calc_metrics(self, results, labels):
+        mappings0 = results['mappings']
+        mappings = {labels[index]: mapping.data[0].tolist() for index, mapping in mappings0.items()}
+
+        distances = [np.linalg.norm(param_utils.translation_from_affine(mapping.data[0]))
+                     for mapping in mappings0.values()]
         if len(distances) > 2:
             # Coefficient of variation
             cvar = np.std(distances) / np.mean(distances)
@@ -658,25 +705,35 @@ class MVSRegistration:
             norm_distance = np.sum(distances) / np.linalg.norm(size)
             confidence = 1 - min(math.sqrt(norm_distance), 1)
 
-        residual_errors = results['residual_errors']
+        residual_errors = {labels[key[0]] + ' - ' + labels[key[1]]: value
+                           for key, value in results['residual_errors'].items()}
         if len(residual_errors) > 0:
             residual_error = np.mean(list(residual_errors.values()))
         else:
             residual_error = 1
 
-        registration_qualities = {key: value.item() for key, value in results['registration_qualities'].items()}
+        registration_qualities = {labels[key[0]] + ' - ' + labels[key[1]]: value.item()
+                                  for key, value in results['registration_qualities'].items()}
         if len(registration_qualities) > 0:
             registration_quality = np.mean(list(registration_qualities.values()))
         else:
             registration_quality = 0
 
+        frcs = {labels[key[0]] + ' - ' + labels[key[1]]: value
+                for key, value in self.calc_resolution_metric(results).items()}
+        frc = np.mean(list(frcs.values()))
+
         summary = (f'Residual error: {residual_error:.3f}'
                    f' Registration quality: {registration_quality:.3f}'
+                   f' FRC: {frc:.4f}'
                    f' Confidence: {confidence:.3f}')
 
-        return {'confidence': confidence,
+        return {'mappings': mappings,
+                'confidence': confidence,
                 'residual_error': residual_error,
                 'residual_errors': residual_errors,
                 'registration_quality': registration_quality,
                 'registration_qualities': registration_qualities,
+                'frc': frc,
+                'frcs': frcs,
                 'summary': summary}

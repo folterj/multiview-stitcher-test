@@ -537,7 +537,7 @@ def create_quantile_images(sims, quantiles):
     channel_images2 = []
     nchannels = sims[0].sizes.get('c', 1)
     for channeli in range(nchannels):
-        channel_images = [sim.isel({'c': 0}).squeeze() for sim in sims]
+        channel_images = [sim.isel({'c': channeli}).squeeze() for sim in sims]
         norm_images = calc_images_quantiles(channel_images, quantiles)
         channel_images2.append(norm_images)
 

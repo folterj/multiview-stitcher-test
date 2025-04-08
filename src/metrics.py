@@ -1,6 +1,9 @@
+import frc
+from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 from sklearn.metrics import euclidean_distances
 
+from src.image.util import image_reshape
 from src.util import apply_transform
 
 
@@ -54,3 +57,24 @@ def calc_match_metrics(points1, points2, transform, threshold, lowe_ratio=None):
     metrics['distance'] = float(distance)
     metrics['norm_distance'] = float(distance / threshold)
     return metrics
+
+
+def calc_frc(image1, image2):
+    pixel_size1 = si_utils.get_spacing_from_sim(image1)
+    pixel_size2 = si_utils.get_spacing_from_sim(image2)
+    pixel_size = np.mean([pixel_size1['x'], pixel_size1['y'], pixel_size2['x'], pixel_size2['y']])
+    image1 = image1.squeeze()
+    image2 = image2.squeeze()
+    max_size = np.flip(np.max([image1.shape, image2.shape], 0))
+    image1 = frc.util.square_image(image_reshape(image1, max_size), add_padding=True)
+    image2 = frc.util.square_image(image_reshape(image2, max_size), add_padding=True)
+
+    frc_curve = frc.two_frc(image1, image2)
+    xs_pix = np.arange(len(frc_curve)) / max(max_size)
+    # scale has units [pixels <length unit>^-1] corresponding to original image
+    xs_nm_freq = xs_pix / pixel_size
+    frc_res, res_y, thres = frc.frc_res(xs_nm_freq, frc_curve, max_size)
+    #plt.plot(xs_nm_freq, thres(xs_nm_freq))
+    #plt.plot(xs_nm_freq, frc_curve)
+    #plt.show()
+    return frc_res
