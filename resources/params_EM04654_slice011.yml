@@ -8,7 +8,7 @@ general:
   metadata_summary: False
   output:
     clear: False
-    overwrite: True
+    overwrite: False
     format: ome.zarr
     tile_size: [1024, 1024]
     compression: []
