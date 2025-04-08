@@ -654,8 +654,12 @@ class MVSRegistration:
             size = get_sim_physical_size(sims[0])
             pairs, _ = get_orthogonal_pairs(origins, size)
         for pair in pairs:
-            overlap_sims = self.get_overlap_images((sims[pair[0]], sims[pair[1]]))
-            metrics[pair] = calc_frc(overlap_sims[0], overlap_sims[1])
+            try:
+                # experimental; in case fail to extract overlap images
+                overlap_sims = self.get_overlap_images((sims[pair[0]], sims[pair[1]]))
+                metrics[pair] = calc_frc(overlap_sims[0], overlap_sims[1])
+            except Exception:
+                logging.warning(f'Failed to calculate FRC')
         return metrics
 
     def get_overlap_images(self, sims):
