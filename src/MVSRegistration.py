@@ -1,10 +1,8 @@
 # https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
 # https://github.com/pydata/xarray/issues/8828
 
-import csv
 from contextlib import nullcontext
 from dask.diagnostics import ProgressBar
-import json
 import logging
 import multiview_stitcher
 from multiview_stitcher import registration, msi_utils, vis_utils
@@ -12,6 +10,8 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
 from multiview_stitcher.registration import get_overlap_bboxes
 import shutil
+
+from pims.image_sequence import filename_to_indices
 from tqdm import tqdm
 import xarray as xr
 
@@ -54,28 +54,41 @@ class MVSRegistration:
         is_transition = ('transition' in operation)
         is_channel_overlay = (len(channels) > 1)
 
+        mappings_header = ['id','x_pixels', 'y_pixels', 'z_pixels', 'x', 'y', 'z', 'rotation']
+
         # get unique labels from filenames
-        file_labels = []
+        file_parts = []
+        label_indices = set()
+        last_parts = None
         for filename in filenames:
-            file_label = '-'.join(map(str, find_all_numbers(filename)[-2:]))
-            if file_label == '':
-                file_label = get_filetitle(filename)
+            parts = split_numeric(get_filetitle(filename))
+            if len(parts) == 0:
+                parts = split_numeric(filename)
+                if len(parts) == 0:
+                    parts = filename
+            file_parts.append(parts)
+            if last_parts is not None:
+                for parti, (part1, part2) in enumerate(zip(last_parts, parts)):
+                    if part1 != part2:
+                        label_indices.add(parti)
+            last_parts = parts
+        label_indices = sorted(list(label_indices))
+
+        file_labels = []
+        for file_part in file_parts:
+            file_label = '_'.join([file_part[i] for i in label_indices])
             file_labels.append(file_label)
+
         if len(set(file_labels)) < len(file_labels):
-            # duplicate labels: get unique differences
-            file_labels = []
-            last_filename = filenames[1]
-            for filename in filenames:
-                unique = set(split_path(filename)) - set(split_path(last_filename))
-                file_labels.append('_'.join(unique))
-                last_filename = filename
+            # fallback if still duplicate labels
+            file_labels = [get_filetitle(filename) for filename in filenames]
 
         if len(filenames) == 0:
             logging.warning('Skipping (no images)')
             return
 
         input_dir = os.path.dirname(filenames[0])
-        parts = split_underscore_numeric(filenames[0])
+        parts = split_numeric_dict(filenames[0])
         output_pattern = params['output'].format_map(parts)
         output = os.path.join(input_dir, output_pattern)    # preserve trailing slash: do not use os.path.normpath()
         registered_fused_filename = output + 'registered'
@@ -89,22 +102,21 @@ class MVSRegistration:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        sims, positions, rotations = self.init_sims(filenames, params,
-                                                    global_rotation=global_rotation, global_center=global_center)
-
-        with open(output + 'prereg_mappings.csv', 'w', newline='') as file:
-            csvwriter = csv.writer(file)
-            header = ['Image', 'x', 'y', 'z', 'rotation']
-            csvwriter.writerow(header)
+        sims, scales, positions, rotations = self.init_sims(filenames, params,
+                                                            global_rotation=global_rotation,
+                                                            global_center=global_center)
+        data = []
+        if self.verbose:
+            print('Pre-reg mappings')
+            print('\t'.join(mappings_header))
+        for label, sim, scale in zip(file_labels, sims, scales):
+            position, rotation = get_data_mapping(sim, transform_key=self.source_transform_key)
+            position_pixels = np.array(position) / scale
+            row = [label] + list(position_pixels) + list(position) + [rotation]
+            data.append(row)
             if self.verbose:
-                print('Pre-reg mappings')
-                print('\t'.join(header))
-            for label, sim in zip(file_labels, sims):
-                position, rotation = get_data_mapping(sim, transform_key=self.source_transform_key)
-                row = [label] + list(position) + [rotation]
-                csvwriter.writerow(row)
-                if self.verbose:
-                    print('\t'.join(map(str, row)))
+                print('\t'.join(map(str, row)))
+        export_csv(output + 'prereg_mappings.csv', data, header=mappings_header)
 
         if len(filenames) == 1:
             logging.warning('Skipping registration (single image)')
@@ -155,37 +167,31 @@ class MVSRegistration:
 
         metrics = self.calc_metrics(results, file_labels)
         mappings = metrics['mappings']
-
         logging.info(metrics['summary'])
-        with open(output + 'metrics.json', 'w') as file:
-            json.dump(metrics, file, indent=4)
-
-        with open(output + 'mappings.json', 'w') as file:
-            json.dump(mappings, file, indent=4)
-
+        export_json(output + 'metrics.json', metrics)
+        export_json(output + 'mappings.json', mappings)
         if self.verbose:
             print('Mappings:')
             for key, value in mappings.items():
                 print(f'{key}: {value}')
-
-        with open(output + 'mappings.csv', 'w', newline='') as file:
-            csvwriter = csv.writer(file)
-            header = ['Image', 'x', 'y', 'z', 'rotation']
-            csvwriter.writerow(header)
+        data = []
+        if self.verbose:
+            print('Mappings')
+            print('\t'.join(mappings_header))
+        for sim, (label, mapping), scale, position, rotation in zip(sims, mappings.items(), scales, positions, rotations):
+            if not normalise_orientation:
+                # rotation already in msim affine transform
+                rotation = None
+            position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
+                                                  transform=np.array(mapping),
+                                                  translation0=position,
+                                                  rotation=rotation)
+            position_pixels = np.array(position) / scale
+            row = [label] + list(position_pixels) + list(position) + [rotation]
+            data.append(row)
             if self.verbose:
-                print('\t'.join(header))
-            for sim, (label, mapping), position, rotation in zip(sims, mappings.items(), positions, rotations):
-                if not normalise_orientation:
-                    # rotation already in msim affine transform
-                    rotation = None
-                position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
-                                                      transform=np.array(mapping),
-                                                      translation0=position,
-                                                      rotation=rotation)
-                row = [label] + list(position) + [rotation]
-                csvwriter.writerow(row)
-                if self.verbose:
-                    print('\t'.join(map(str, row)))
+                print('\t'.join(map(str, row)))
+        export_csv(output + 'mappings.csv', data, header=mappings_header)
 
         # plot the image configuration after registration
         logging.info('Plotting images...')
@@ -261,6 +267,7 @@ class MVSRegistration:
         source0 = sources[0]
         images = []
         sims = []
+        scales = []
         translations = []
         rotations = []
 
@@ -275,14 +282,29 @@ class MVSRegistration:
         last_z_position = None
         different_z_positions = False
         delta_zs = []
-        for source in tqdm(sources, disable=not self.verbose, desc='Initialising sims'):
+        for filename, source in tqdm(zip(filenames, sources), disable=not self.verbose, desc='Initialising sims'):
+            scale = None
             if isinstance(source_metadata, dict):
-                translation = [source_metadata.get('x', 0), source_metadata.get('y', 0), source_metadata.get('z', 0)]
+                context = {'filename_numeric': find_all_numbers(filename)}
+                if 'position' in source_metadata:
+                    translation0 = source_metadata['position']
+                    translation = [eval_context(translation0, 'x', 0, context),
+                                   eval_context(translation0, 'y', 0, context)]
+                    if 'z' in translation0:
+                        translation += [eval_context(translation0, 'z', 0, context)]
+                if 'scale' in source_metadata:
+                    scale0 = source_metadata['scale']
+                    scale = [eval_context(scale0, 'x', 1, context),
+                             eval_context(scale0, 'y', 1, context)]
+                    if 'z' in scale0:
+                        scale += [eval_context(scale0, 'z', 1, context)]
             else:
-                translation = np.array(source.get_position_micrometer())
+                translation = source.get_position_micrometer()
                 if 'invert' in source_metadata:
                     translation[0] = -translation[0]
                     translation[1] = -translation[1]
+            if scale is None:
+                scale = source.get_pixel_size_micrometer()
             if len(translation) >= 3:
                 z_position = translation[2]
             else:
@@ -290,11 +312,12 @@ class MVSRegistration:
             if last_z_position is not None and z_position != last_z_position:
                 different_z_positions = True
                 delta_zs.append(z_position - last_z_position)
-            translations.append(translation)
             if global_rotation is not None:
                 rotation = global_rotation
             else:
                 rotation = source.get_rotation()
+            scales.append(scale)
+            translations.append(translation)
             rotations.append(rotation)
             image = redimension_data(source.get_source_dask()[0], source.dimension_order, output_order)
             images.append(image)
@@ -321,9 +344,11 @@ class MVSRegistration:
 
         increase_z_positions = is_stack and not different_z_positions
         z_position = 0
-        for source, image, translation, rotation in zip(sources, images, translations, rotations):
+        scales2 = []
+        translations2 = []
+        for source, image, scale, translation, rotation in zip(sources, images, scales, translations, rotations):
             # transform #dimensions need to match
-            scale_dict = convert_xyz_to_dict(source.get_pixel_size_micrometer())
+            scale_dict = convert_xyz_to_dict(scale)
             if len(scale_dict) > 0 and 'z' not in scale_dict:
                 scale_dict['z'] = abs(z_scale)
             translation_dict = convert_xyz_to_dict(translation)
@@ -348,7 +373,9 @@ class MVSRegistration:
                 c_coords=channel_labels
             )
             sims.append(sim.chunk({'y': 1024, 'x': 1024}))
-        return sims, translations, rotations
+            scales2.append([scale_dict[dim] for dim in 'xyz'])
+            translations2.append([translation_dict[dim] for dim in 'xyz'])
+        return sims, scales2, translations2, rotations
 
     def validate_overlap(self, sims, labels, is_stack=False, expect_large_overlap=False):
         overlaps = []

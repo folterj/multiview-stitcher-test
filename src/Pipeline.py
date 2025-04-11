@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from src.constants import version
 from src.image.source_helper import get_images_metadata
-from src.util import dir_regex, get_filetitle, find_all_numbers, split_underscore_numeric
+from src.util import dir_regex, get_filetitle, find_all_numbers, split_numeric_dict
 
 
 class Pipeline:
@@ -68,23 +68,25 @@ class Pipeline:
     def run_operation(self, params):
         operation = params['operation']
         use_global_metadata = 'global' in params.get('source_metadata', '')
-        filenames = dir_regex(params['input'])
-        # sort last key first
-        filenames = sorted(filenames, key=lambda file: list(reversed(find_all_numbers(file))))
         metadata_summary = self.params_general.get('metadata_summary', False)
+
+        filenames = dir_regex(params['input'])
+        filenames = sorted(filenames, key=lambda file: list(find_all_numbers(file)))    # sort first key first
         if len(filenames) == 0:
             logging.warning(f'Skipping operation {operation} (no files)')
             return
 
         operation_parts = operation.split()
         if 'match' in operation_parts:
-            if len(operation_parts) > operation_parts.index('match') + 1:
-                match_label = operation_parts[-1]
+            # check if match label provided
+            index = operation_parts.index('match') + 1
+            if len(operation_parts) > index:
+                match_label = operation_parts[index]
             else:
-                match_label = 's'
+                match_label = None
             matches = {}
             for filename in filenames:
-                parts = split_underscore_numeric(filename)
+                parts = split_numeric_dict(filename)
                 match_value = parts.get(match_label)
                 if match_value is not None:
                     if match_value not in matches:

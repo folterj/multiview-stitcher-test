@@ -1,4 +1,6 @@
 import ast
+import csv
+import json
 import cv2 as cv
 import glob
 import math
@@ -6,6 +8,8 @@ import numpy as np
 import os
 import re
 from scipy.spatial.transform import Rotation
+#from tifffile import xml2dict
+#import yaml
 
 
 def get_default(x, default):
@@ -147,16 +151,29 @@ def find_all_numbers(text: str) -> list:
     return list(map(int, re.findall(r'\d+', text)))
 
 
-def split_underscore_numeric(text: str) -> dict:
+def split_numeric(text: str) -> list:
+    num_parts = []
+    parts = re.split(r'[_/\\.]', text)
+    for part in parts:
+        num_span = re.search(r'\d+', part)
+        if num_span:
+            num_parts.append(part)
+    return num_parts
+
+
+def split_numeric_dict(text: str) -> dict:
     num_parts = {}
-    parts = text.split('_')
+    parts = re.split(r'[_/\\.]', text)
+    parti = 0
     for part in parts:
         num_span = re.search(r'\d+', part)
         if num_span:
             index = num_span.start()
-            if index > 0:
-                label = part[:index]
-                num_parts[label] = num_span.group()
+            label = part[:index]
+            if label == '':
+                label = parti
+            num_parts[label] = num_span.group()
+            parti += 1
     return num_parts
 
 
@@ -215,6 +232,13 @@ def split_value_unit_list(text: str) -> list:
             value_units.append((value, unit))
         i += 1
     return value_units
+
+
+def eval_context(data, key, default_value, context):
+    value = data.get(key, default_value)
+    if isinstance(value, str):
+        value = eval(value, context)
+    return value
 
 
 def get_value_units_micrometer(value_units0: list) -> list:
@@ -340,8 +364,8 @@ def get_orthogonal_pairs(origins, image_size_um):
     pairs = []
     angles = []
     for i, j in np.transpose(np.triu_indices(len(origins), 1)):
-        origini = origins[i]
-        originj = origins[j]
+        origini = np.array(origins[i])
+        originj = np.array(origins[j])
         distance = math.dist(origini, originj)
         if distance < max(image_size_um):
             pairs.append((i, j))
@@ -374,3 +398,36 @@ def retuple(chunks, shape):
 
     dims_to_add = len(shape) - len(chunks)
     return *shape[:dims_to_add], *chunks
+
+
+#def import_metadata(filename, fields=None):
+#    # return dict[id] = {values}
+#    ext = os.path.splitext(filename)[1].lower()
+#    with open(filename, 'r', encoding='utf8') as file:
+#        if ext == '.csv':
+#            metadata = csv.reader(file)
+#        elif ext in ['.json', '.ome.json']:
+#            metadata = json.load(file)
+#        elif ext == '.xml':
+#            metadata = xml2dict(file.read())
+#        elif ext in ['.yaml', '.yml']:
+#            metadata = yaml.safe_load(file)
+#        else:
+#            raise ValueError(f'Unsupported file type: {ext}')
+#        if fields is not None:
+#            metadata = [[data[field] for field in fields] for data in metadata]
+#    return metadata
+
+
+def export_json(filename, data):
+    with open(filename, 'w') as file:
+        json.dump(data, file, indent=4)
+
+
+def export_csv(filename, data, header=None):
+    with open(filename, 'w', newline='') as file:
+        csvwriter = csv.writer(file)
+        if header is not None:
+            csvwriter.writerow(header)
+        for row in data:
+            csvwriter.writerow(row)
