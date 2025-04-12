@@ -1,1 +1,5 @@
 multiview-stitcher[ants]
+opencv-python
+spatial-image
+multiscale-spatial-image
+frc

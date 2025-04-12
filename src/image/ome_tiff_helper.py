@@ -58,7 +58,7 @@ def create_tiff_metadata(pixel_size, dimension_order=None, channels=[], position
         resolution = [1e4 / size for size in pixel_size_um]
 
     if is_ome:
-        ome_metadata = {'Creator': 'multiview-stitcher'}
+        ome_metadata = {'Creator': 'muvis-align'}
         if dimension_order is not None:
             #ome_metadata['DimensionOrder'] = dimension_order[::-1].upper()
             ome_metadata['axes'] = dimension_order.upper()

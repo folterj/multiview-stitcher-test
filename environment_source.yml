@@ -1,4 +1,4 @@
-name: multiview-stitcher-source-env
+name: muvis-source-env
 channels:
  - conda-forge
  - defaults
@@ -17,7 +17,8 @@ dependencies:
  - pip
  - pip:
    - git+https://github.com/multiview-stitcher/multiview-stitcher.git@improve_global_opt
+   - antspyx
    - opencv-python
    - spatial-image
    - multiscale-spatial-image
-   - antspyx
+   - frc

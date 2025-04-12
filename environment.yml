@@ -1,4 +1,4 @@
-name: multiview-stitcher-env
+name: muvis-env
 channels:
  - conda-forge
  - defaults
@@ -17,6 +17,3 @@ dependencies:
  - pip
  - pip:
    - -r requirements.txt
-   - opencv-python
-   - spatial-image
-   - multiscale-spatial-image
