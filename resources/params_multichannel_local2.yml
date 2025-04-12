@@ -1,5 +1,5 @@
 general:
-  log_filename: log/multiview-stitcher-test.log
+  log_filename: log/muvis-align.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
   show_filtered: False

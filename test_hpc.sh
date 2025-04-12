@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=multiview_stitcher_test
+#SBATCH --job-name=muvis_align
 #SBATCH --part=ncpu
 #SBATCH --cpus-per-task=16
 #SBATCH --time=1-00:00          # Runtime in D-HH:MM, minimum of 10 minutes

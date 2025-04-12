@@ -7,5 +7,5 @@ output:
   break_on_error: False
 
 log:
-  filename: log/multiview-stitcher-test.log
+  filename: log/muvis-align.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'

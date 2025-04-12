@@ -1,5 +1,5 @@
 general:
-  log_filename: log/multiview-stitcher-test.log
+  log_filename: log/muvis-align.log
   log_format: '%(asctime)s %(levelname)s: %(message)s'
   show_original: False
   break_on_error: True
@@ -9,7 +9,7 @@ general:
   output:
     clear: False
     overwrite: True
-    format: ome.zarr, ome.tiff
+    format: ome.zarr
     tile_size: [1024, 1024]
     compression: []
     npyramid_add: 4
@@ -17,8 +17,8 @@ general:
 
 operations:
   - operation: register match S
-    #input: /nemo/project/proj-ccp-vem/datasets/12193/data/S???/*.tiff
-    input: D:/slides/12193/data/S???/*.tiff
+    input: /nemo/project/proj-ccp-vem/datasets/12193/data/S???/*.tiff
+    #input: D:/slides/12193/data/S???/*.tiff
     source_metadata: {'scale': {'x': 0.004, 'y': 0.004}, 'position': {'y':'filename_numeric[-3]*24', 'x':'filename_numeric[-2]*24'}}
     #flatfield_quantile: 0.95
     normalisation: True
@@ -27,8 +27,8 @@ operations:
     output: ../../stitched/S{S}/
 
   - operation: stack
-    #input: /nemo/project/proj-ccp-vem/datasets/12193/stitched/S???/*.ome.zarr
-    input: D:/slides/12193/stitched/S???/*.ome.zarr
+    input: /nemo/project/proj-ccp-vem/datasets/12193/stitched/S???/*.ome.zarr
+    #input: D:/slides/12193/stitched/S???/*.ome.zarr
     source_metadata: source
     extra_metadata: {'scale': {'z': 0.1}}
     normalisation: False
