@@ -40,15 +40,15 @@ def save_ome_zarr(filename, data, dimension_order, pixel_size, channels, transla
             scale /= pyramid_downsample
 
     if ome_version == '0.4':
-        format = ome_zarr.format.FormatV04()
+        ome_zarr_format = ome_zarr.format.FormatV04()
     elif ome_version == '0.5':
-        format = ome_zarr.format.FormatV05()
+        ome_zarr_format = ome_zarr.format.FormatV05()   # future support anticipated
     else:
-        format = ome_zarr.format.CurrentFormat()
+        ome_zarr_format = ome_zarr.format.CurrentFormat()
 
     zarr_root = zarr.open_group(store=filename, mode="w", zarr_version=zarr_version)
     write_image(image=data, group=zarr_root, axes=axes, coordinate_transformations=coordinate_transformations,
-                scaler=scaler, storage_options=storage_options, fmt=format)
+                scaler=scaler, storage_options=storage_options, fmt=ome_zarr_format)
 
     keys = list(zarr_root.array_keys())
     data_smallest = zarr_root.get(keys[-1])

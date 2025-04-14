@@ -282,7 +282,7 @@ class MVSRegistration:
         last_z_position = None
         different_z_positions = False
         delta_zs = []
-        for filename, source in tqdm(zip(filenames, sources), disable=not self.verbose, desc='Initialising sims'):
+        for filename, source in tqdm(zip(filenames, sources), total=len(filenames), disable=not self.verbose, desc='Initialising sims'):
             scale = None
             if isinstance(source_metadata, dict):
                 context = {'filename_numeric': find_all_numbers(filename)}
