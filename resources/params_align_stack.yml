@@ -6,6 +6,7 @@ general:
   break_on_error: False
   verbose: True
   verbose_mvs: False
+  chunk_size: [1024, 1024]
   output:
     clear: True
     format: ome.tiff

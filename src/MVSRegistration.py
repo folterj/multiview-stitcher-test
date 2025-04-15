@@ -260,6 +260,7 @@ class MVSRegistration:
     def init_sims(self, filenames, params, global_rotation=None, global_center=None):
         operation = params['operation']
         source_metadata = params.get('source_metadata', 'source')
+        chunk_size = self.params_general.get('chunk_size', [1024, 1024])
         extra_metadata = params.get('extra_metadata', {})
         z_scale = extra_metadata.get('scale', {}).get('z')
 
@@ -372,7 +373,7 @@ class MVSRegistration:
                 transform_key=self.source_transform_key,
                 c_coords=channel_labels
             )
-            sims.append(sim.chunk({'y': 1024, 'x': 1024}))
+            sims.append(sim.chunk(convert_xyz_to_dict(chunk_size)))
             scales2.append([scale_dict[dim] for dim in 'xyz'])
             translations2.append([translation_dict[dim] for dim in 'xyz'])
         return sims, scales2, translations2, rotations
@@ -596,6 +597,7 @@ class MVSRegistration:
 
     def fuse(self, sims, params):
         operation = params['operation']
+        chunk_size = self.params_general.get('chunk_size', [1024, 1024])
         extra_metadata = params.get('extra_metadata', {})
         channels = extra_metadata.get('channels', [])
         z_scale = extra_metadata.get('scale', {}).get('z')
@@ -610,7 +612,7 @@ class MVSRegistration:
 
         sim0 = sims[0]
         source_type = sim0.dtype
-        output_chunksize = {'y': 1024, 'x': 1024}
+        output_chunksize = convert_xyz_to_dict(chunk_size)
         for dim in sim0.dims:
             if dim not in output_chunksize:
                 output_chunksize[dim] = 1

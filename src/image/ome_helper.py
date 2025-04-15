@@ -27,8 +27,9 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
         channels = sim.attrs.get('channels', [])
 
     tile_size = params.get('tile_size')
-    if tile_size is not None:
-        chunking = retuple(tuple(reversed(tile_size)), sim.shape)
+    if tile_size:
+        tile_size = tuple(reversed(tile_size))
+        chunking = retuple(tile_size, sim.shape)
         sim = sim.chunk(chunks=chunking)
 
     compression = params.get('compression')
