@@ -21,13 +21,13 @@ except Exception as e:
 from src.util import *
 
 
-def show_image(image: np.ndarray):
-    plt.imshow(image)
-    plt.show()
-
-
-def show_image_gray(image: np.ndarray):
-    plt.imshow(image, cmap='gray')
+def show_image(image, title='', cmap=None):
+    nchannels = image.shape[2] if len(image.shape) > 2 else 1
+    if cmap is None:
+        cmap = 'gray' if nchannels == 1 else None
+    plt.imshow(image, cmap=cmap)
+    if title != '':
+        plt.title(title)
     plt.show()
 
 

@@ -16,7 +16,6 @@ operations:
   - operation: register
     input: C:/Project/slides/EM04768_01_substrate_04/EM/a0004/roi0000/10_nm_pixel_size_a0004_roi0000_t0000.ome.tif
     source_metadata: source normalise
-    #flatfield_quantile: 0.95
     normalisation: True
     filter_foreground: False
     use_orthogonal_pairs: True

@@ -177,6 +177,36 @@ def split_numeric_dict(text: str) -> dict:
     return num_parts
 
 
+def get_unique_file_labels(filenames: list) -> list:
+    file_labels = []
+    file_parts = []
+    label_indices = set()
+    last_parts = None
+    for filename in filenames:
+        parts = split_numeric(get_filetitle(filename))
+        if len(parts) == 0:
+            parts = split_numeric(filename)
+            if len(parts) == 0:
+                parts = filename
+        file_parts.append(parts)
+        if last_parts is not None:
+            for parti, (part1, part2) in enumerate(zip(last_parts, parts)):
+                if part1 != part2:
+                    label_indices.add(parti)
+        last_parts = parts
+    label_indices = sorted(list(label_indices))
+
+    for file_part in file_parts:
+        file_label = '_'.join([file_part[i] for i in label_indices])
+        file_labels.append(file_label)
+
+    if len(set(file_labels)) < len(file_labels):
+        # fallback for duplicate labels
+        file_labels = [get_filetitle(filename) for filename in filenames]
+
+    return file_labels
+
+
 def split_num_text(text: str) -> list:
     num_texts = []
     block = ''

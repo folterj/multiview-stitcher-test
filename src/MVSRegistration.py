@@ -10,8 +10,6 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
 from multiview_stitcher.registration import get_overlap_bboxes
 import shutil
-
-from pims.image_sequence import filename_to_indices
 from tqdm import tqdm
 import xarray as xr
 
@@ -56,37 +54,11 @@ class MVSRegistration:
 
         mappings_header = ['id','x_pixels', 'y_pixels', 'z_pixels', 'x', 'y', 'z', 'rotation']
 
-        # get unique labels from filenames
-        file_parts = []
-        label_indices = set()
-        last_parts = None
-        for filename in filenames:
-            parts = split_numeric(get_filetitle(filename))
-            if len(parts) == 0:
-                parts = split_numeric(filename)
-                if len(parts) == 0:
-                    parts = filename
-            file_parts.append(parts)
-            if last_parts is not None:
-                for parti, (part1, part2) in enumerate(zip(last_parts, parts)):
-                    if part1 != part2:
-                        label_indices.add(parti)
-            last_parts = parts
-        label_indices = sorted(list(label_indices))
-
-        file_labels = []
-        for file_part in file_parts:
-            file_label = '_'.join([file_part[i] for i in label_indices])
-            file_labels.append(file_label)
-
-        if len(set(file_labels)) < len(file_labels):
-            # fallback if still duplicate labels
-            file_labels = [get_filetitle(filename) for filename in filenames]
-
         if len(filenames) == 0:
             logging.warning('Skipping (no images)')
             return
 
+        file_labels = get_unique_file_labels(filenames)
         input_dir = os.path.dirname(filenames[0])
         parts = split_numeric_dict(filenames[0])
         output_pattern = params['output'].format_map(parts)
@@ -103,8 +75,8 @@ class MVSRegistration:
             os.makedirs(output_dir)
 
         sims, scales, positions, rotations = self.init_sims(filenames, params,
-                                                            global_rotation=global_rotation,
-                                                            global_center=global_center)
+                                                            global_center=global_center,
+                                                            global_rotation=global_rotation)
         data = []
         if self.verbose:
             print('Pre-reg mappings')
@@ -131,11 +103,11 @@ class MVSRegistration:
 
         if show_original:
             # before registration:
-            logging.info('Plotting images...')
+            logging.info('Exporting original...')
             original_positions_filename = output + 'positions_original.pdf'
 
             if self.verbose:
-                progress = tqdm(desc='Plotting original', total=1)
+                progress = tqdm(desc='Plotting', total=1)
             vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.source_transform_key,
                                      use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                      show_plot=self.verbose, output_filename=original_positions_filename)
@@ -143,17 +115,21 @@ class MVSRegistration:
                 progress.update()
                 progress.close()
 
-            logging.info('Fusing original...')
-            if self.verbose:
-                progress = tqdm(desc='Fusing original', total=1)
-            if is_stack:
-                sims2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims]
-            else:
-                sims2d = sims
-            original_fused = fusion.fuse(sims2d, transform_key=self.source_transform_key)
-            if self.verbose:
-                progress.update()
-                progress.close()
+            if 'thumb' in output_params.get('format', ''):
+                thumbnail_filename = output + 'thumb_original.tiff'
+                if self.verbose:
+                    progress = tqdm(desc='Saving thumbnail', total=1)
+                self.save_thumbnail(thumbnail_filename, params, filenames,
+                                    global_center=global_center,
+                                    global_rotation=global_rotation,
+                                    nom_sims=sims,
+                                    transform_key=self.source_transform_key)
+                if self.verbose:
+                    progress.update()
+                    progress.close()
+
+            sims2d = [si_utils.max_project_sim(sim, dim='z') for sim in sims] if is_stack else sims
+            original_fused = self.fuse(sims2d, params, transform_key=self.source_transform_key)
 
             original_fused_filename = output + 'original'
             save_image(original_fused_filename, original_fused, transform_key=self.source_transform_key,
@@ -165,6 +141,7 @@ class MVSRegistration:
         reg_result = results['reg_result']
         sims = results['sims']
 
+        logging.info('Exporting registered...')
         metrics = self.calc_metrics(results, file_labels)
         mappings = metrics['mappings']
         logging.info(metrics['summary'])
@@ -194,10 +171,9 @@ class MVSRegistration:
         export_csv(output + 'mappings.csv', data, header=mappings_header)
 
         # plot the image configuration after registration
-        logging.info('Plotting images...')
         registered_positions_filename = output + 'positions_registered.pdf'
         if self.verbose:
-            progress = tqdm(desc='Plotting registered', total=1)
+            progress = tqdm(desc='Plotting', total=1)
         vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.reg_transform_key,
                                  use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
@@ -217,6 +193,19 @@ class MVSRegistration:
             summary_plot_filename = output + 'groupwise_resolution.pdf'
             figure.savefig(summary_plot_filename)
 
+        if 'thumb' in output_params.get('format', ''):
+            thumbnail_filename = output + 'thumb.tiff'
+            if self.verbose:
+                progress = tqdm(desc='Saving thumbnail', total=1)
+            self.save_thumbnail(thumbnail_filename, params, filenames,
+                                global_center=global_center,
+                                global_rotation=global_rotation,
+                                nom_sims=sims,
+                                transform_key=self.reg_transform_key)
+            if self.verbose:
+                progress.update()
+                progress.close()
+
         fused_image = self.fuse(sims, params)
         logging.info('Saving fused image...')
         save_image(registered_fused_filename, fused_image,
@@ -224,40 +213,9 @@ class MVSRegistration:
                    params=output_params, verbose=self.verbose)
 
         if is_transition:
-            logging.info('Creating transition...')
-            pixel_size = [si_utils.get_spacing_from_sim(sims[0]).get(dim, 1) for dim in 'xy']
-            nframes = params.get('frames', 1)
-            spacing = params.get('spacing', [1.1, 1])
-            scale = params.get('scale', 1)
-            transition_filename = output + 'transition'
-            video = Video(transition_filename + '.mp4', fps=params.get('fps', 1))
-            positions0 = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims])
-            center = np.mean(positions0, 0)
-            window = get_image_window(fused_image)
+            self.save_video(output, sims, fused_image, params)
 
-            max_size = None
-            acum = 0
-            for framei in range(nframes):
-                c = (1 - np.cos(framei / (nframes - 1) * 2 * math.pi)) / 2
-                acum += c / (nframes / 2)
-                spacing1 = spacing[0] + (spacing[1] - spacing[0]) * acum
-                for sim, position0 in zip(sims, positions0):
-                    transform = param_utils.identity_transform(ndim=2, t_coords=[0])
-                    transform[0][:2, 2] += (position0 - center) * spacing1
-                    si_utils.set_sim_affine(sim, transform, transform_key=self.transition_transform_key)
-                frame = fusion.fuse(sims, transform_key=self.transition_transform_key).squeeze()
-                frame = float2int_image(normalise_values(frame, window[0], window[1]))
-                frame = cv.resize(np.asarray(frame), None, fx=scale, fy=scale)
-                if max_size is None:
-                    max_size = frame.shape[1], frame.shape[0]
-                    video.size = max_size
-                frame = image_reshape(frame, max_size)
-                save_tiff(transition_filename + f'{framei:04d}.tiff', frame, None, pixel_size)
-                video.write(frame)
-
-            video.close()
-
-    def init_sims(self, filenames, params, global_rotation=None, global_center=None):
+    def init_sims(self, filenames, params, global_center=None, global_rotation=None, pyramid_level=0):
         operation = params['operation']
         source_metadata = params.get('source_metadata', 'source')
         chunk_size = self.params_general.get('chunk_size', [1024, 1024])
@@ -284,9 +242,12 @@ class MVSRegistration:
         different_z_positions = False
         delta_zs = []
         for filename, source in tqdm(zip(filenames, sources), total=len(filenames), disable=not self.verbose, desc='Initialising sims'):
-            scale = None
+            scale = source.get_pixel_size_micrometer()
+            translation = source.get_position_micrometer()
+            rotation = source.get_rotation()
             if isinstance(source_metadata, dict):
-                context = {'filename_numeric': find_all_numbers(filename)}
+                filename_numeric = find_all_numbers(filename)
+                context = {'filename_numeric': filename_numeric, 'fn': filename_numeric}
                 if 'position' in source_metadata:
                     translation0 = source_metadata['position']
                     translation = [eval_context(translation0, 'x', 0, context),
@@ -299,13 +260,14 @@ class MVSRegistration:
                              eval_context(scale0, 'y', 1, context)]
                     if 'z' in scale0:
                         scale += [eval_context(scale0, 'z', 1, context)]
-            else:
-                translation = source.get_position_micrometer()
-                if 'invert' in source_metadata:
-                    translation[0] = -translation[0]
-                    translation[1] = -translation[1]
-            if scale is None:
-                scale = source.get_pixel_size_micrometer()
+                if 'rotation' in source_metadata:
+                    rotation = source_metadata['rotation']
+
+            if pyramid_level != 0:
+                scale = np.array(scale) * source.sizes[0] / source.sizes[pyramid_level]
+            if 'invert' in source_metadata:
+                translation[0] = -translation[0]
+                translation[1] = -translation[1]
             if len(translation) >= 3:
                 z_position = translation[2]
             else:
@@ -315,14 +277,14 @@ class MVSRegistration:
                 delta_zs.append(z_position - last_z_position)
             if global_rotation is not None:
                 rotation = global_rotation
-            else:
-                rotation = source.get_rotation()
+
             scales.append(scale)
             translations.append(translation)
             rotations.append(rotation)
-            image = redimension_data(source.get_source_dask()[0], source.dimension_order, output_order)
+            image = redimension_data(source.get_source_dask()[pyramid_level], source.dimension_order, output_order)
             images.append(image)
             last_z_position = z_position
+
         if z_scale is None:
             if len(delta_zs) > 0:
                 z_scale = np.min(delta_zs)
@@ -359,6 +321,7 @@ class MVSRegistration:
                 z_position += z_scale
             channel_labels = [channel.get('label', '') for channel in source.get_channels()]
             if rotation is None or 'norm' in source_metadata:
+                # if positions are normalised, don't use rotation
                 transform = None
             else:
                 transform = param_utils.invert_coordinate_order(
@@ -414,7 +377,7 @@ class MVSRegistration:
         return overlaps
 
     def preprocess(self, sims, params):
-        flatfield_quantile = params.get('flatfield_quantile')
+        flatfield_quantiles = params.get('flatfield_quantiles')
         normalisation = params.get('normalisation', False)
         filter_foreground = params.get('filter_foreground', False)
         extra_metadata = params.get('extra_metadata', {})
@@ -422,10 +385,11 @@ class MVSRegistration:
 
         is_channel_overlay = (len(channels) > 1)
 
-        if flatfield_quantile is not None or filter_foreground:
+        if flatfield_quantiles is not None or filter_foreground:
             foreground_map = calc_foreground_map(sims)
-        if flatfield_quantile is not None:
-            sims = flatfield_correction(sims, self.source_transform_key, foreground_map, flatfield_quantile)
+        if flatfield_quantiles is not None:
+            sims = flatfield_correction(sims, self.source_transform_key, flatfield_quantiles,
+                                        foreground_map=foreground_map)
 
         if normalisation:
             use_global = not is_channel_overlay
@@ -595,7 +559,9 @@ class MVSRegistration:
                 'sims': sims,
                 'pairs': pairs}
 
-    def fuse(self, sims, params):
+    def fuse(self, sims, params, transform_key=None):
+        if transform_key is None:
+            transform_key = self.reg_transform_key
         operation = params['operation']
         chunk_size = self.params_general.get('chunk_size', [1024, 1024])
         extra_metadata = params.get('extra_metadata', {})
@@ -618,10 +584,10 @@ class MVSRegistration:
                 output_chunksize[dim] = 1
 
         if self.verbose:
-            progress = tqdm(desc='Fusing registered', total=1)
+            progress = tqdm(desc='Fusing', total=1)
 
         if is_stack:
-            output_stack_properties = calc_output_properties(sims, self.reg_transform_key, z_scale=z_scale)
+            output_stack_properties = calc_output_properties(sims, transform_key, z_scale=z_scale)
             # set z shape which is wrongly calculated by calc_stack_properties_from_view_properties_and_params
             # because it does not take into account the correct input z spacing because of stacks of one z plane
             output_stack_properties['shape']['z'] = len(sims)
@@ -634,14 +600,14 @@ class MVSRegistration:
             # fuse all sims together using simple average fusion
             fused_image = fusion.fuse(
                 sims,
-                transform_key=self.reg_transform_key,
+                transform_key=transform_key,
                 output_stack_properties=output_stack_properties,
                 output_chunksize=output_chunksize,
                 fusion_func=fusion.simple_average_fusion,
             )
         elif is_channel_overlay:
             # convert to multichannel images
-            output_stack_properties = calc_output_properties(sims, self.reg_transform_key)
+            output_stack_properties = calc_output_properties(sims, transform_key)
             if self.verbose:
                 logging.info(f'Output stack: {output_stack_properties}')
             data_size = np.prod(list(output_stack_properties['shape'].values())) * len(sims) * source_type.itemsize
@@ -649,14 +615,14 @@ class MVSRegistration:
 
             channel_sims = [fusion.fuse(
                 [sim],
-                transform_key=self.reg_transform_key,
+                transform_key=transform_key,
                 output_chunksize=output_chunksize,
                 output_stack_properties=output_stack_properties
             ) for sim in sims]
             channel_sims = [sim.assign_coords({'c': [channels[simi]['label']]}) for simi, sim in enumerate(channel_sims)]
             fused_image = xr.combine_nested([sim.rename() for sim in channel_sims], concat_dim='c', combine_attrs='override')
         else:
-            output_stack_properties = calc_output_properties(sims, self.reg_transform_key)
+            output_stack_properties = calc_output_properties(sims, transform_key)
             if self.verbose:
                 logging.info(f'Output stack: {output_stack_properties}')
             data_size = np.prod(list(output_stack_properties['shape'].values())) * source_type.itemsize
@@ -664,7 +630,7 @@ class MVSRegistration:
 
             fused_image = fusion.fuse(
                 sims,
-                transform_key=self.reg_transform_key,
+                transform_key=transform_key,
                 output_chunksize=output_chunksize,
             )
 
@@ -673,6 +639,26 @@ class MVSRegistration:
             progress.close()
 
         return fused_image
+
+    def save_thumbnail(self, output_filename, params, filenames, global_center, global_rotation,
+                       nom_sims=None, transform_key=None):
+        sims = self.init_sims(filenames, params,
+                              global_center=global_center,
+                              global_rotation=global_rotation,
+                              pyramid_level=-1)[0]
+
+        if nom_sims is not None:
+            if sims[0].sizes['x'] >= nom_sims[0].sizes['x']:
+                logging.warning('Unable to generate scaled down thumbnail due to lack of source pyramid sizes')
+                return
+
+            if transform_key is not None and transform_key != self.source_transform_key:
+                for nom_sim, sim in zip(nom_sims, sims):
+                    si_utils.set_sim_affine(sim,
+                                            si_utils.get_affine_from_sim(nom_sim, transform_key=transform_key),
+                                            transform_key=transform_key)
+        fused_image = self.fuse(sims, params, transform_key=transform_key)
+        save_tiff(output_filename, fused_image)
 
     def calc_resolution_metric(self, results):
         metrics = {}
@@ -770,3 +756,37 @@ class MVSRegistration:
                 'frc': frc,
                 'frcs': frcs,
                 'summary': summary}
+
+    def save_video(self, output, sims, fused_image, params):
+        logging.info('Creating transition video...')
+        pixel_size = [si_utils.get_spacing_from_sim(sims[0]).get(dim, 1) for dim in 'xy']
+        nframes = params.get('frames', 1)
+        spacing = params.get('spacing', [1.1, 1])
+        scale = params.get('scale', 1)
+        transition_filename = output + 'transition'
+        video = Video(transition_filename + '.mp4', fps=params.get('fps', 1))
+        positions0 = np.array([si_utils.get_origin_from_sim(sim, asarray=True) for sim in sims])
+        center = np.mean(positions0, 0)
+        window = get_image_window(fused_image)
+
+        max_size = None
+        acum = 0
+        for framei in range(nframes):
+            c = (1 - np.cos(framei / (nframes - 1) * 2 * math.pi)) / 2
+            acum += c / (nframes / 2)
+            spacing1 = spacing[0] + (spacing[1] - spacing[0]) * acum
+            for sim, position0 in zip(sims, positions0):
+                transform = param_utils.identity_transform(ndim=2, t_coords=[0])
+                transform[0][:2, 2] += (position0 - center) * spacing1
+                si_utils.set_sim_affine(sim, transform, transform_key=self.transition_transform_key)
+            frame = fusion.fuse(sims, transform_key=self.transition_transform_key).squeeze()
+            frame = float2int_image(normalise_values(frame, window[0], window[1]))
+            frame = cv.resize(np.asarray(frame), None, fx=scale, fy=scale)
+            if max_size is None:
+                max_size = frame.shape[1], frame.shape[0]
+                video.size = max_size
+            frame = image_reshape(frame, max_size)
+            save_tiff(transition_filename + f'{framei:04d}.tiff', frame, None, pixel_size)
+            video.write(frame)
+
+        video.close()

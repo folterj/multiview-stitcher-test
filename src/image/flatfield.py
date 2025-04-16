@@ -1,4 +1,3 @@
-import logging
 from multiview_stitcher import spatial_image_utils as si_utils
 import numpy as np
 import os
@@ -7,34 +6,45 @@ from src.image.ome_tiff_helper import load_tiff, save_tiff
 from src.image.util import float2int_image, int2float_image, create_quantile_images
 
 
-def flatfield_correction(sims, transform_key, foreground_map, flatfield_quantile, cache_location=None):
-    max_image = None
+def flatfield_correction(sims, transform_key, quantiles, foreground_map=None, cache_location=None):
+    quantile_images = []
     if cache_location is not None:
-        norm_image_filename = cache_location + f'norm{flatfield_quantile}.tiff'
-        if os.path.exists(norm_image_filename):
-            max_image = load_tiff(norm_image_filename)
+        for quantile in quantiles:
+            filename = cache_location + f'quantile{quantile}.tiff'
+            if os.path.exists(filename):
+                quantile_images.append(load_tiff(filename))
 
-    if max_image is None:
-        max_image = calc_flatfield_image(sims, foreground_map, flatfield_quantile)
+    if len(quantile_images) < len(quantiles):
+        quantile_images = calc_flatfield_images(sims, quantiles, foreground_map)
         if cache_location is not None:
-            save_tiff(norm_image_filename, max_image)
+            for quantile, quantile_image in zip(quantiles, quantile_images):
+                filename = cache_location + f'quantile{quantile}.tiff'
+                save_tiff(filename, quantile_image)
 
-    return apply_flatfield_correction(max_image, sims, transform_key)
+    return apply_flatfield_correction(sims, transform_key, quantiles, quantile_images)
 
-def calc_flatfield_image(sims, foreground_map, flatfield_quantile):
+def calc_flatfield_images(sims, quantiles, foreground_map=None):
+    if foreground_map is not None:
+        back_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if not is_foreground]
+    else:
+        back_sims = sims
     dtype = sims[0].dtype
-    back_sims = [sim for sim, is_foreground in zip(sims, foreground_map) if not is_foreground]
-    norm_images = create_quantile_images(back_sims, quantiles=[flatfield_quantile])
-    max_image = norm_images[0]
     maxval = 2 ** (8 * dtype.itemsize) - 1
-    max_image = max_image / np.float32(maxval)
-    return max_image
+    flatfield_images = [image / np.float32(maxval) for image in create_quantile_images(back_sims, quantiles=quantiles)]
+    return flatfield_images
 
-def apply_flatfield_correction(flatfield_image, sims, transform_key):
+def apply_flatfield_correction(sims, transform_key, quantiles, quantile_images):
     new_sims = []
     dtype = sims[0].dtype
+    dark = 0
+    bright = 1
+    for quantile, quantile_image in zip(quantiles, quantile_images):
+        if quantile < 0.5:
+            dark = quantile_image
+        else:
+            bright = quantile_image
     for sim in sims:
-        image = float2int_image(image_flatfield_correction(int2float_image(sim), bright=flatfield_image), dtype)
+        image = float2int_image(image_flatfield_correction(int2float_image(sim), dark=dark, bright=bright), dtype)
         new_sim = si_utils.get_sim_from_array(
             image,
             dims=sim.dims,

@@ -6,6 +6,7 @@ general:
   verbose: True
   verbose_mvs: False
   metadata_summary: False
+  chunk_size: [1024, 1024]
   output:
     clear: False
     overwrite: True
