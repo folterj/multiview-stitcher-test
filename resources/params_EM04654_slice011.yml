@@ -10,22 +10,22 @@ general:
   output:
     clear: False
     overwrite: False
-    format: ome.zarr
+    format: thumbnail, ome.zarr
     tile_size: [1024, 1024]
     compression: []
     npyramid_add: 4
     pyramid_downsample: 2
 
 operations:
-  - operation: register match s
-    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
-    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
-    #input: D:/slides/EM04654_slice011/tiles_slice21_24/g????/t????/*.ome.tif
-    source_metadata: source normalise global center
-    normalisation: True
-    use_orthogonal_pairs: True
-    method: phase_correlation
-    output: ../../../stitched/slice{s}/
+#  - operation: register match s
+#    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/tiles/g????/t????/*.ome.tif
+#    #input: D:/slides/EM04654_slice011/tiles/g????/t????/*.ome.tif
+#    #input: D:/slides/EM04654_slice011/tiles_slice21_24/g????/t????/*.ome.tif
+#    source_metadata: source normalise global center
+#    normalisation: True
+#    use_orthogonal_pairs: True
+#    method: phase_correlation
+#    output: ../../../stitched/slice{s}/
 
   - operation: stack
     input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr

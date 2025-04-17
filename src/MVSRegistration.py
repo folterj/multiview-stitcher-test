@@ -9,6 +9,7 @@ from multiview_stitcher import registration, msi_utils, vis_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
 from multiview_stitcher.registration import get_overlap_bboxes
+import numpy as np
 import shutil
 from tqdm import tqdm
 import xarray as xr
@@ -16,7 +17,7 @@ import xarray as xr
 from src.Video import Video
 from src.image.flatfield import flatfield_correction
 from src.image.ome_helper import save_image, exists_output_image
-from src.image.ome_tiff_helper import save_tiff
+from src.image.ome_tiff_helper import save_tiff, save_ome_tiff
 from src.image.source_helper import create_source
 from src.image.util import *
 from src.metrics import calc_frc
@@ -105,10 +106,9 @@ class MVSRegistration:
                 progress.close()
 
             if 'thumb' in output_params.get('format', ''):
-                thumbnail_filename = output + 'thumb_original.tiff'
                 if self.verbose:
                     progress = tqdm(desc='Saving thumbnail', total=1)
-                self.save_thumbnail(thumbnail_filename, params, filenames,
+                self.save_thumbnail(output + 'thumb_original.ome.tiff', params, filenames,
                                     global_center=global_center,
                                     global_rotation=global_rotation,
                                     nom_sims=sims,
@@ -143,7 +143,12 @@ class MVSRegistration:
             # copy transforms to sims
             for sim, label in zip(sims, file_labels):
                 mapping = param_utils.affine_to_xaffine(np.array(mappings[label]))
-                si_utils.set_sim_affine(sim, mapping, transform_key=self.reg_transform_key)
+                if is_stack:
+                    transform = param_utils.identity_transform(ndim=3)
+                    transform.loc[{dim: mapping.coords[dim] for dim in mapping.dims}] = mapping
+                else:
+                    transform = mapping
+                si_utils.set_sim_affine(sim, transform, transform_key=self.reg_transform_key)
         else:
             register_sims, indices = self.preprocess(sims, params)
             results = self.register(sims, register_sims, indices, params)
@@ -203,10 +208,9 @@ class MVSRegistration:
             progress.close()
 
         if 'thumb' in output_params.get('format', ''):
-            thumbnail_filename = output + 'thumb.tiff'
             if self.verbose:
                 progress = tqdm(desc='Saving thumbnail', total=1)
-            self.save_thumbnail(thumbnail_filename, params, filenames,
+            self.save_thumbnail(output + 'thumb.ome.tiff', params, filenames,
                                 global_center=global_center,
                                 global_rotation=global_rotation,
                                 nom_sims=sims,
@@ -224,7 +228,7 @@ class MVSRegistration:
         if is_transition:
             self.save_video(output, sims, fused_image, params)
 
-    def init_sims(self, filenames, params, global_center=None, global_rotation=None, pyramid_level=0):
+    def init_sims(self, filenames, params, global_center=None, global_rotation=None, target_scale=None):
         operation = params['operation']
         source_metadata = params.get('source_metadata', 'source')
         chunk_size = self.params_general.get('chunk_size', [1024, 1024])
@@ -241,6 +245,7 @@ class MVSRegistration:
 
         is_stack = ('stack' in operation)
         is_3d = (source0.get_size_xyzct()[2] > 1)
+        pyramid_level = 0
 
         output_order = 'zyx' if is_stack or is_3d else 'yx'
         ndims = len(output_order)
@@ -272,8 +277,12 @@ class MVSRegistration:
                 if 'rotation' in source_metadata:
                     rotation = source_metadata['rotation']
 
-            if pyramid_level != 0:
-                scale = np.array(scale) * source.sizes[0] / source.sizes[pyramid_level]
+            if target_scale:
+                pyramid_level = np.argmin(abs(np.mean(np.array(source.sizes[0]) / source.sizes, -1) - target_scale))
+                scale_z = scale[2] if len(scale) >= 3 else None
+                scale = np.array(scale)[:2] * source.sizes[0] / source.sizes[pyramid_level]
+                if scale_z is not None:
+                    scale = list(scale) + [scale_z]
             if 'invert' in source_metadata:
                 translation[0] = -translation[0]
                 translation[1] = -translation[1]
@@ -654,7 +663,7 @@ class MVSRegistration:
         sims = self.init_sims(filenames, params,
                               global_center=global_center,
                               global_rotation=global_rotation,
-                              pyramid_level=-1)[0]
+                              target_scale=16)[0]
 
         if nom_sims is not None:
             if sims[0].sizes['x'] >= nom_sims[0].sizes['x']:
@@ -666,8 +675,10 @@ class MVSRegistration:
                     si_utils.set_sim_affine(sim,
                                             si_utils.get_affine_from_sim(nom_sim, transform_key=transform_key),
                                             transform_key=transform_key)
-        fused_image = self.fuse(sims, params, transform_key=transform_key)
-        save_tiff(output_filename, fused_image)
+        fused_image = self.fuse(sims, params, transform_key=transform_key).squeeze()
+        dimension_order = ''.join(fused_image.dims)
+        pixel_size = [si_utils.get_spacing_from_sim(fused_image)[dim] for dim in 'xyz']
+        save_ome_tiff(output_filename, fused_image.data, dimension_order, pixel_size)
 
     def calc_resolution_metric(self, results):
         metrics = {}
