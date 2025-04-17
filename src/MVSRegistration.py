@@ -10,6 +10,7 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.mv_graph import NotEnoughOverlapError
 from multiview_stitcher.registration import get_overlap_bboxes
 import numpy as np
+from ome_zarr.scale import Scaler
 import shutil
 from tqdm import tqdm
 import xarray as xr
@@ -660,6 +661,7 @@ class MVSRegistration:
 
     def save_thumbnail(self, output_filename, params, filenames, global_center, global_rotation,
                        nom_sims=None, transform_key=None):
+        output_params = self.params_general['output']
         sims = self.init_sims(filenames, params,
                               global_center=global_center,
                               global_rotation=global_rotation,
@@ -678,7 +680,12 @@ class MVSRegistration:
         fused_image = self.fuse(sims, params, transform_key=transform_key).squeeze()
         dimension_order = ''.join(fused_image.dims)
         pixel_size = [si_utils.get_spacing_from_sim(fused_image)[dim] for dim in 'xyz']
-        save_ome_tiff(output_filename, fused_image.data, dimension_order, pixel_size)
+        compression = output_params.get('compression')
+        pyramid_downsample = output_params.get('pyramid_downsample', 2)
+        npyramid_add = get_max_downsamples(fused_image.shape, output_params.get('npyramid_add', 0), pyramid_downsample)
+        scaler = Scaler(downscale=pyramid_downsample, max_layer=npyramid_add)
+        save_ome_tiff(output_filename, fused_image.data, dimension_order, pixel_size,
+                      scaler=scaler, compression=compression)
 
     def calc_resolution_metric(self, results):
         metrics = {}
