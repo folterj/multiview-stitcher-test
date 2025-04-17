@@ -28,8 +28,8 @@ operations:
 #    output: ../../../stitched/slice{s}/
 
   - operation: stack
-    input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
-    #input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
+    #input: /nemo/project/proj-mrc-mm/raw/em/EM04654/EM04654_slice011/EM04654_slice11_run_final_24-11-15/stitched/slice?????/*.ome.zarr
+    input: D:/slides/EM04654_slice011/stitched/slice?????/registered.ome.zarr
     source_metadata: source
     extra_metadata: {'scale': {'z': 0.1}}
     normalisation: False

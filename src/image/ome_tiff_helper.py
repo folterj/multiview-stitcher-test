@@ -25,7 +25,11 @@ def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], posi
     else:
         npyramid_add = 0
 
-    with TiffWriter(filename) as writer:
+    # maximum size (w/o compression)
+    size = data.size * data.itemsize
+    bigtiff = (size > 2 ** 32)
+
+    with TiffWriter(filename, bigtiff=bigtiff) as writer:
         for i in range(npyramid_add + 1):
             if i == 0:
                 subifds = npyramid_add
