@@ -433,7 +433,7 @@ def retuple(chunks, shape):
 #def import_metadata(filename, fields=None):
 #    # return dict[id] = {values}
 #    ext = os.path.splitext(filename)[1].lower()
-#    with open(filename, 'r', encoding='utf8') as file:
+#    with open(filename, encoding='utf8') as file:
 #        if ext == '.csv':
 #            metadata = csv.reader(file)
 #        elif ext in ['.json', '.ome.json']:
@@ -449,13 +449,19 @@ def retuple(chunks, shape):
 #    return metadata
 
 
+def import_json(filename):
+    with open(filename, encoding='utf8') as file:
+        data = json.load(file)
+    return data
+
+
 def export_json(filename, data):
-    with open(filename, 'w') as file:
+    with open(filename, 'w', encoding='utf8') as file:
         json.dump(data, file, indent=4)
 
 
 def export_csv(filename, data, header=None):
-    with open(filename, 'w', newline='') as file:
+    with open(filename, 'w', encoding='utf8', newline='') as file:
         csvwriter = csv.writer(file)
         if header is not None:
             csvwriter.writerow(header)

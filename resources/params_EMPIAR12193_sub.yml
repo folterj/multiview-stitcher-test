@@ -10,7 +10,7 @@ general:
   output:
     clear: False
     overwrite: True
-    format: thumbnail, ome.zarr, ome.tiff
+    format: thumbnail, ome.tiff
     tile_size: [1024, 1024]
     compression: []
     npyramid_add: 4
@@ -18,9 +18,9 @@ general:
 
 operations:
   - operation: register
-    input: D:/slides/12193/data/S000/*.tiff
+    input: D:/slides/12193/data_subset_small/S000/*.tiff
     source_metadata: {'scale': {'x': 0.004, 'y': 0.004}, 'position': {'y':'fn[-3]*24', 'x':'fn[-2]*24'}}
     normalisation: True
     use_orthogonal_pairs: True
     method: phase_correlation
-    output: ../../stitched/S000/
+    output: ../../stitched_subset/S000/

@@ -237,7 +237,7 @@ def test5(sims, tmp_path):
 
     print(f'New transforms shape: {sims[0].transforms[new_transform_key].shape}')
     progress = tqdm(desc='Plot', total=1)
-    vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=transform_key, use_positional_colors=False)
+    vis_utils.plot_positions(sims, transform_key=transform_key, use_positional_colors=False)
     progress.update()
     progress.close()
 

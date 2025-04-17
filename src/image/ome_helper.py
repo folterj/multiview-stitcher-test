@@ -40,10 +40,10 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     if 'zar' in params.get('format', 'zar'):
         if verbose:
             progress = tqdm(desc='Saving zarr', total=1)
-        #save_ome_zarr(filename + zarr_extension, sim.data, dimension_order, pixel_size,
+        #save_ome_zarr(str(filename) + zarr_extension, sim.data, dimension_order, pixel_size,
         #              channels, position, rotation, compression=compression, scaler=scaler,
         #              zarr_version=3, ome_version='0.5')
-        save_ome_ngff(filename + zarr_extension, sim, channels, position, rotation,
+        save_ome_ngff(str(filename) + zarr_extension, sim, channels, position, rotation,
                       pyramid_downsample=pyramid_downsample)
         if verbose:
             progress.update()
@@ -51,12 +51,12 @@ def save_image(filename, sim, transform_key=None, channels=None, translation0=No
     if 'tif' in params.get('format', 'tif'):
         if verbose:
             progress = tqdm(desc='Saving tiff', total=1)
-        save_ome_tiff(filename + tiff_extension, sim.data, dimension_order, pixel_size,
+        save_ome_tiff(str(filename) + tiff_extension, sim.data, dimension_order, pixel_size,
                       channels, positions, rotation, tile_size=tile_size, compression=compression, scaler=scaler)
         if verbose:
             progress.update()
             progress.close()
 
 
-def exists_output(path):
+def exists_output_image(path):
     return os.path.exists(path + zarr_extension) or os.path.exists(path + tiff_extension)

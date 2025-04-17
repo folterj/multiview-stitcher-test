@@ -15,7 +15,7 @@ import xarray as xr
 
 from src.Video import Video
 from src.image.flatfield import flatfield_correction
-from src.image.ome_helper import save_image, exists_output
+from src.image.ome_helper import save_image, exists_output_image
 from src.image.ome_tiff_helper import save_tiff
 from src.image.source_helper import create_source
 from src.image.util import *
@@ -66,7 +66,7 @@ class MVSRegistration:
         registered_fused_filename = output + 'registered'
 
         output_dir = os.path.dirname(output)
-        if not overwrite and exists_output(registered_fused_filename):
+        if not overwrite and exists_output_image(registered_fused_filename):
             logging.warning(f'Skipping existing output {os.path.normpath(output_dir)}')
             return
         if clear:
@@ -90,17 +90,6 @@ class MVSRegistration:
                 print('\t'.join(map(str, row)))
         export_csv(output + 'prereg_mappings.csv', data, header=mappings_header)
 
-        if len(filenames) == 1:
-            logging.warning('Skipping registration (single image)')
-            save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
-                       params=output_params, verbose=self.verbose)
-            return
-
-        overlaps = self.validate_overlap(sims, file_labels, is_stack, is_stack or is_channel_overlay)
-        overall_overlap = np.mean(overlaps)
-        if overall_overlap < overlap_threshold:
-            raise ValueError(f'Not enough overlap: {overall_overlap * 100:.1f}%')
-
         if show_original:
             # before registration:
             logging.info('Exporting original...')
@@ -108,7 +97,7 @@ class MVSRegistration:
 
             if self.verbose:
                 progress = tqdm(desc='Plotting', total=1)
-            vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.source_transform_key,
+            vis_utils.plot_positions(sims, transform_key=self.source_transform_key,
                                      use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                      show_plot=self.verbose, output_filename=original_positions_filename)
             if self.verbose:
@@ -135,63 +124,83 @@ class MVSRegistration:
             save_image(original_fused_filename, original_fused, transform_key=self.source_transform_key,
                        params=output_params)
 
-        register_sims, indices = self.preprocess(sims, params)
-        results = self.register(sims, register_sims, indices, params)
+        if len(filenames) == 1:
+            logging.warning('Skipping registration (single image)')
+            save_image(registered_fused_filename, sims[0], channels=channels, translation0=positions[0],
+                       params=output_params, verbose=self.verbose)
+            return
 
-        reg_result = results['reg_result']
-        sims = results['sims']
+        overlaps = self.validate_overlap(sims, file_labels, is_stack, is_stack or is_channel_overlay)
+        overall_overlap = np.mean(overlaps)
+        if overall_overlap < overlap_threshold:
+            raise ValueError(f'Not enough overlap: {overall_overlap * 100:.1f}%')
 
-        logging.info('Exporting registered...')
-        metrics = self.calc_metrics(results, file_labels)
-        mappings = metrics['mappings']
-        logging.info(metrics['summary'])
-        export_json(output + 'metrics.json', metrics)
-        export_json(output + 'mappings.json', mappings)
-        if self.verbose:
-            print('Mappings:')
-            for key, value in mappings.items():
-                print(f'{key}: {value}')
-        data = []
-        if self.verbose:
-            print('Mappings')
-            print('\t'.join(mappings_header))
-        for sim, (label, mapping), scale, position, rotation in zip(sims, mappings.items(), scales, positions, rotations):
-            if not normalise_orientation:
-                # rotation already in msim affine transform
-                rotation = None
-            position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
-                                                  transform=np.array(mapping),
-                                                  translation0=position,
-                                                  rotation=rotation)
-            position_pixels = np.array(position) / scale
-            row = [label] + list(position_pixels) + list(position) + [rotation]
-            data.append(row)
+        mappings_filename = output + 'mappings.json'
+        registration_done = os.path.exists(mappings_filename)
+        if registration_done:
+            # load registration mappings
+            mappings = import_json(mappings_filename)
+            # copy transforms to sims
+            for sim, label in zip(sims, file_labels):
+                mapping = param_utils.affine_to_xaffine(np.array(mappings[label]))
+                si_utils.set_sim_affine(sim, mapping, transform_key=self.reg_transform_key)
+        else:
+            register_sims, indices = self.preprocess(sims, params)
+            results = self.register(sims, register_sims, indices, params)
+
+            reg_result = results['reg_result']
+            sims = results['sims']
+
+            logging.info('Exporting registered...')
+            metrics = self.calc_metrics(results, file_labels)
+            mappings = metrics['mappings']
+            logging.info(metrics['summary'])
+            export_json(mappings_filename, mappings)
+            export_json(output + 'metrics.json', metrics)
             if self.verbose:
-                print('\t'.join(map(str, row)))
-        export_csv(output + 'mappings.csv', data, header=mappings_header)
+                print('Mappings:')
+                for key, value in mappings.items():
+                    print(f'{key}: {value}')
+            data = []
+            if self.verbose:
+                print('Mappings')
+                print('\t'.join(mappings_header))
+            for sim, (label, mapping), scale, position, rotation in zip(sims, mappings.items(), scales, positions, rotations):
+                if not normalise_orientation:
+                    # rotation already in msim affine transform
+                    rotation = None
+                position, rotation = get_data_mapping(sim, transform_key=self.reg_transform_key,
+                                                      transform=np.array(mapping),
+                                                      translation0=position,
+                                                      rotation=rotation)
+                position_pixels = np.array(position) / scale
+                row = [label] + list(position_pixels) + list(position) + [rotation]
+                data.append(row)
+                if self.verbose:
+                    print('\t'.join(map(str, row)))
+            export_csv(output + 'mappings.csv', data, header=mappings_header)
 
-        # plot the image configuration after registration
+            summary_plot = reg_result.get('pairwise_registration', {}).get('summary_plot')
+            if summary_plot is not None:
+                figure, axes = summary_plot
+                summary_plot_filename = output + 'pairwise_registration.pdf'
+                figure.savefig(summary_plot_filename)
+
+            summary_plot = reg_result.get('groupwise_resolution', {}).get('summary_plot')
+            if summary_plot is not None:
+                figure, axes = summary_plot
+                summary_plot_filename = output + 'groupwise_resolution.pdf'
+                figure.savefig(summary_plot_filename)
+
         registered_positions_filename = output + 'positions_registered.pdf'
         if self.verbose:
             progress = tqdm(desc='Plotting', total=1)
-        vis_utils.plot_positions([msi_utils.get_msim_from_sim(sim) for sim in sims], transform_key=self.reg_transform_key,
+        vis_utils.plot_positions(sims, transform_key=self.reg_transform_key,
                                  use_positional_colors=False, view_labels=file_labels, view_labels_size=3,
                                  show_plot=self.verbose, output_filename=registered_positions_filename)
         if self.verbose:
             progress.update()
             progress.close()
-
-        summary_plot = reg_result.get('pairwise_registration', {}).get('summary_plot')
-        if summary_plot is not None:
-            figure, axes = summary_plot
-            summary_plot_filename = output + 'pairwise_registration.pdf'
-            figure.savefig(summary_plot_filename)
-
-        summary_plot = reg_result.get('groupwise_resolution', {}).get('summary_plot')
-        if summary_plot is not None:
-            figure, axes = summary_plot
-            summary_plot_filename = output + 'groupwise_resolution.pdf'
-            figure.savefig(summary_plot_filename)
 
         if 'thumb' in output_params.get('format', ''):
             thumbnail_filename = output + 'thumb.tiff'
