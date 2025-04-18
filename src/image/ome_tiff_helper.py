@@ -19,15 +19,17 @@ def save_ome_tiff(filename, data, dimension_order, pixel_size, channels=[], posi
 
     ome_metadata, resolution0, resolution_unit0 = create_tiff_metadata(pixel_size, dimension_order,
                                                                        channels, positions, rotation, is_ome=True)
-
+    # maximum size (w/o compression)
+    max_size = data.size * data.itemsize
+    size = max_size
     if scaler is not None:
         npyramid_add = scaler.max_layer
+        for i in range(npyramid_add):
+            size //= (scaler.downscale ** 2)
+            max_size += size
     else:
         npyramid_add = 0
-
-    # maximum size (w/o compression)
-    size = data.size * data.itemsize
-    bigtiff = (size > 2 ** 32)
+    bigtiff = (max_size > 2 ** 32)
 
     with TiffWriter(filename, bigtiff=bigtiff) as writer:
         for i in range(npyramid_add + 1):
