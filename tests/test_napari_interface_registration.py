@@ -12,6 +12,7 @@ Each test is parameterized to run with different project configurations
 (muvis_align_project.yml, muvis_align_project2.yml, etc.).
 """
 
+import logging
 import os
 import tempfile
 import importlib
@@ -110,13 +111,20 @@ class TestNapariInterfaceRegistration:
             config_copy.write_text(project_config.read_text())
             
             interface.project_path(str(config_copy))
-            
+
             assert interface.params_path == str(config_copy)
             assert interface.params is not None
             assert 'registration' in interface.params
             assert 'fusion' in interface.params
             assert 'input_output' in interface.params
             assert 'pre_processing' in interface.params
+
+            # project_path() -> update_input_output_path() -> init_logging() opens a
+            # FileHandler on a log file inside tmpdir - it must be closed before this
+            # block exits, or Windows refuses to delete the still-open file on cleanup
+            for handler in logging.getLogger().handlers[:]:
+                handler.close()
+                logging.getLogger().removeHandler(handler)
 
     def test_project_params_structure(self, config_data):
         """Test that project configuration has expected structure."""
