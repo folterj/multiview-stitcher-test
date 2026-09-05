@@ -56,6 +56,42 @@ class MVSRegistration:
                       global_rotation=global_rotation, global_center=global_center,
                       overwrite=overwrite, clear=clear, ui=ui, verbose=verbose, debug=debug)
 
+    @property
+    def msims(self):
+        # built lazily from the cheap per-source geometry init_data() already resolved (sources/
+        # positions/_msim_transforms/_msim_output_order/_msim_z_scale) - real msim construction
+        # (the expensive part) is deferred until something genuinely needs pixel-shaped data
+        # (preview fusion, pre-processing/registration/fusion), not eagerly for every project load
+        return self.ensure_msims()
+
+    @msims.setter
+    def msims(self, value):
+        self._msims = value
+
+    def ensure_msims(self, progress_factory=None):
+        # same lazy build the msims property triggers, but callable ahead of time with a
+        # progress_factory - lets a caller that's about to force this (e.g. run_pre_processing())
+        # show fine-grained, per-source progress for it instead of it happening silently as a
+        # side effect of evaluating `self.msims` as a plain argument expression
+        if self._msims is None:
+            self._build_msims(progress_factory=progress_factory)
+        return self._msims
+
+    def _build_msims(self, progress_factory=None):
+        progress_context = (
+            progress_factory(total=len(self.sources), desc='Building sources')
+            if progress_factory is not None
+            else nullcontext(None)
+        )
+        with progress_context as pbar:
+            msims = []
+            for source, translation, transform in zip(self.sources, self.positions, self._msim_transforms):
+                msims.append(build_source_msim(source, self._msim_output_order, translation, transform,
+                                               self.source_transform_key, z_scale=self._msim_z_scale))
+                if pbar is not None:
+                    pbar.update(1)
+        self._msims = msims
+
     def reset(self):
         self.state = RegState.UNINIT
         self.source_transform_key = 'source_metadata'
@@ -210,7 +246,8 @@ class MVSRegistration:
             return False
 
         with Timer('init sims', self.logging_time):
-            msims = self.init_data()
+            self.init_data()
+            msims = self.msims
 
         is_3d = (self.sources[0].get_size().get('z', 0) > 1)
         is_stack = ('stack' in operation)
@@ -496,7 +533,8 @@ class MVSRegistration:
         z_position = 0
         final_scales = []
         final_translations = []
-        msims = []
+        transforms = []
+        msims = [] if not store else None
         for source, level, rescale, scale, translation, rotation, file_label in zip(
                 sources, levels, rescales, scales, translations, rotations, self.file_labels):
             # transform #dimensions need to match
@@ -527,23 +565,32 @@ class MVSRegistration:
                 if 'y' not in translation:
                     translation['y'] = 0
 
-            # build this source's own multiscale msim directly from its already-correct, cached
-            # msim (ImageSource.get_msim, itself built from fix_metadata/_build_msim/_restamp_msim)
-            # - only the run-level deltas that no single source can know about itself (cross-source
-            # normalisation, z-stacking, extra_metadata) are applied here, via assign_coords, never
-            # by reconstructing from raw arrays with si_utils.get_sim_from_array
-            msim = build_source_msim(source, output_order, translation, transform, self.source_transform_key,
-                                     z_scale=z_scale)
-            msims.append(msim)
+            transforms.append(transform)
+            if not store:
+                # build this source's own multiscale msim directly from its already-correct,
+                # cached msim (ImageSource.get_msim, itself built from fix_metadata/_build_msim/
+                # _restamp_msim) - only the run-level deltas that no single source can know about
+                # itself (cross-source normalisation, z-stacking, extra_metadata) are applied
+                # here, via assign_coords, never by reconstructing from raw arrays with
+                # si_utils.get_sim_from_array
+                msim = build_source_msim(source, output_order, translation, transform, self.source_transform_key,
+                                         z_scale=z_scale)
+                msims.append(msim)
             final_scales.append(scale)
             final_translations.append(translation)
 
         if store:
-            self.msims = msims
             self.scales = final_scales
             self.positions = final_translations
             self.rotations = rotations
             self.state = RegState.SIMS_INIT
+            # defer the actual per-source msim build (build_source_msim(), the expensive part)
+            # until self.msims is genuinely read - see the msims property/_build_msims()
+            self._msim_output_order = output_order
+            self._msim_z_scale = z_scale
+            self._msim_transforms = transforms
+            self._msims = None
+            return None
 
         return msims
 

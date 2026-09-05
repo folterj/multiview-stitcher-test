@@ -337,6 +337,56 @@ def build_source_msim(source, output_order, translation, transform, transform_ke
     return DataTree.from_dict(datasets)
 
 
+def build_source_shape_sim(source, output_order, translation, transform, transform_key, z_scale=None, level=0,
+                           promote_z=False):
+    """Cheap, single-level equivalent of build_source_msim(), for shape/overlap-shape geometry
+    only. Built straight from source.data[level] - never touches source.msim, so it never
+    triggers the full per-pyramid-level DataTree construction (the expensive part of
+    initialising a source). Only shape/dims/coords/transform are ever read off the result
+    downstream (si_utils.get_stack_properties_from_sim / get_origin_from_sim / multiview_stitcher's
+    own overlap-bbox math) - bounding-box geometry is resolution-invariant, so a single level is
+    sufficient.
+
+    promote_z=True mirrors make_msims_3d()'s own promotion (see promote_sim_to_3d()) for the
+    case where output_order itself has no 'z' (every source is individually 2D) but different
+    sources sit at different z heights (e.g. a z-stack of 2D tiles) - without this, a source's
+    own z position/translation would otherwise be silently dropped instead of becoming a real,
+    if size-1, 'z' dim/coordinate on the returned sim.
+    """
+    c_coords = [channel.get('label', '') for channel in source.get_channels()]
+    image = si_utils.get_sim_from_array(
+        source.data[level], dims=list(source.dimension_order),
+        scale=source.pixel_sizes[level] or None, translation=dict(source.position) or None,
+        affine=source.transform, transform_key=source.transform_key, c_coords=c_coords)
+    image = redimension_sim_data(image, source.dimension_order, output_order)
+    image = ensure_spatial_image_dims(image, c_coords=c_coords)
+
+    if transform is None:
+        spatial_dims = [dim for dim in output_order if dim in 'xyz']
+        xaffine = param_utils.identity_transform(len(spatial_dims))
+    else:
+        xaffine = param_utils.affine_to_xaffine(transform)
+
+    translation_arg = dict(translation)
+    if translation_arg:
+        if 'x' not in translation_arg:
+            translation_arg['x'] = 0
+        if 'y' not in translation_arg:
+            translation_arg['y'] = 0
+
+    pixel_size = dict(source.pixel_sizes[level])
+    if 'z' in output_order and 'z' not in pixel_size:
+        pixel_size['z'] = abs(z_scale) if z_scale else 1
+    spatial_dims = si_utils.get_spatial_dims_from_sim(image)
+    new_coords = {dim: translation_arg.get(dim, 0) + np.arange(image.sizes[dim]) * pixel_size.get(dim, 1)
+                  for dim in spatial_dims}
+    image = image.assign_coords(new_coords)
+    si_utils.set_sim_affine(image, xaffine, transform_key)
+    if promote_z:
+        image = promote_sim_to_3d(image, translation.get('z', 0))
+    return image
+
+
 def map_msim_levels(msim, level_func):
     """Apply level_func(sim, scale_key) -> new_sim independently to every scale level of `msim`,
     reassembling the results into a new multiscale msim covering the same levels. Each level is
@@ -1736,30 +1786,36 @@ def make_sims_2d(sims):
     return new_sims
 
 
+def promote_sim_to_3d(sim, z_position):
+    # a sim/level with no native 'z' dim (e.g. a single 2D tile in a project where different
+    # tiles sit at different z heights) gets a size-1 'z' dim added at its own z_position, and
+    # every one of its transforms widened to 3D - the shared body behind make_msims_3d()'s
+    # per-level promotion, also used directly by build_source_shape_sim() (which builds a plain
+    # sim, never a msim, so map_msim_levels() doesn't apply)
+    if 'z' not in sim.dims:
+        sim = sim.expand_dims({'z': [z_position]}, axis=-3)
+    for transform_key in si_utils.get_tranform_keys_from_sim(sim):
+        transform = si_utils.get_affine_from_sim(sim, transform_key=transform_key)
+        if 4 not in transform.shape:
+            transform_3d = param_utils.identity_transform(ndim=3)
+            if 't' in transform.dims:
+                transform_3d.loc[{dim: transform.coords[dim] for dim in transform.sel(t=0).dims}] = transform.sel(t=0)
+            else:
+                transform_3d.loc[{dim: transform.coords[dim] for dim in transform.dims}] = transform
+            si_utils.set_sim_affine(sim, transform_3d, transform_key=transform_key)
+    return sim
+
+
 def make_msims_3d(msims, z_scale=None, positions=None):
-    # msim-native equivalent of make_sims_3d: same expand_dims + 3D-transform-widening logic,
-    # applied independently to every pyramid level via map_msim_levels
+    # msim-native equivalent of make_sims_3d: same promote_sim_to_3d() logic, applied
+    # independently to every pyramid level via map_msim_levels
     if not z_scale:
         z_scale = 1
     new_msims = []
     for index, msim in enumerate(msims):
         z_position = positions[index].get('z', index * z_scale) if positions else index * z_scale
-
-        def level_func(sim, scale_key, z_position=z_position):
-            if 'z' not in sim.dims:
-                sim = sim.expand_dims({'z': [z_position]}, axis=-3)
-            for transform_key in si_utils.get_tranform_keys_from_sim(sim):
-                transform = si_utils.get_affine_from_sim(sim, transform_key=transform_key)
-                if 4 not in transform.shape:
-                    transform_3d = param_utils.identity_transform(ndim=3)
-                    if 't' in transform.dims:
-                        transform_3d.loc[{dim: transform.coords[dim] for dim in transform.sel(t=0).dims}] = transform.sel(t=0)
-                    else:
-                        transform_3d.loc[{dim: transform.coords[dim] for dim in transform.dims}] = transform
-                    si_utils.set_sim_affine(sim, transform_3d, transform_key=transform_key)
-            return sim
-
-        new_msims.append(map_msim_levels(msim, level_func))
+        new_msims.append(map_msim_levels(
+            msim, lambda sim, scale_key, z_position=z_position: promote_sim_to_3d(sim, z_position)))
     return new_msims
 
 

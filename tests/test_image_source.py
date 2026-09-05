@@ -118,6 +118,103 @@ def test_zarr_image_source_basic(filename):
     assert sim1.sizes['y'] == sim0.sizes['y'] // 2
 
 
+@pytest.mark.parametrize('output_order,z_scale', [('yx', None), ('zyx', 2.5)])
+def test_build_source_shape_sim_matches_build_source_msim_scale0(output_order, z_scale):
+    """build_source_shape_sim() (the cheap, source.msim-independent geometry used for the
+    shapes/overlap-shapes preview) must produce output identical to today's real path
+    (build_source_msim()'s scale0, derived from source.msim) - including the z-padding
+    convention applied when output_order forces a dim ('z') a 2D source doesn't natively have,
+    the specific edge case flagged as the main correctness risk of this shortcut."""
+    from muvis_align.image.util import build_source_msim, build_source_shape_sim, \
+        create_image_shapes, create_overlap_shapes
+    from muvis_align.util import create_transform
+
+    transform_key = 'source_metadata'
+    sources = [TiffImageSource(str(DATA_DIR / f)) for f in TIFF_FILES[:2]]
+    translations = [{'x': 0.0, 'y': 0.0}, {'x': 50.0, 'y': 30.0}]
+    rotations = [0, 15]
+    matrix_size = len([dim for dim in output_order if dim in 'xyz']) + 1
+
+    real_sims, cheap_sims = [], []
+    for source, translation, rotation in zip(sources, translations, rotations):
+        transform = param_utils.invert_coordinate_order(
+            create_transform(translation, rotation, matrix_size=matrix_size))
+        real_msim = build_source_msim(source, output_order, translation, transform, transform_key,
+                                      z_scale=z_scale)
+        real_sims.append(msi_utils.get_sim_from_msim(real_msim, scale='scale0'))
+        cheap_sims.append(build_source_shape_sim(source, output_order, translation, transform,
+                                                  transform_key, z_scale=z_scale))
+
+    for real_sim, cheap_sim in zip(real_sims, cheap_sims):
+        real_props = si_utils.get_stack_properties_from_sim(real_sim, transform_key=transform_key)
+        cheap_props = si_utils.get_stack_properties_from_sim(cheap_sim, transform_key=transform_key)
+        for key in ('shape', 'spacing', 'origin'):
+            assert real_props[key].keys() == cheap_props[key].keys()
+            for dim in real_props[key]:
+                assert real_props[key][dim] == pytest.approx(cheap_props[key][dim])
+        np.testing.assert_allclose(np.asarray(real_props['transform']), np.asarray(cheap_props['transform']))
+
+    real_shapes = create_image_shapes(real_sims, transform_key=transform_key)
+    cheap_shapes = create_image_shapes(cheap_sims, transform_key=transform_key)
+    assert len(real_shapes) == len(cheap_shapes)
+    for real_shape, cheap_shape in zip(real_shapes, cheap_shapes):
+        np.testing.assert_allclose(real_shape, cheap_shape)
+
+    real_overlap_shapes, real_pairs = create_overlap_shapes(real_sims, transform_key=transform_key)
+    cheap_overlap_shapes, cheap_pairs = create_overlap_shapes(cheap_sims, transform_key=transform_key)
+    assert [tuple(pair) for pair in real_pairs] == [tuple(pair) for pair in cheap_pairs]
+    for real_shape, cheap_shape in zip(real_overlap_shapes, cheap_overlap_shapes):
+        np.testing.assert_allclose(real_shape, cheap_shape)
+
+
+def test_build_source_shape_sim_promote_z_matches_make_msims_3d():
+    """When every source is individually 2D (output_order has no 'z') but different sources sit
+    at different z heights - e.g. a z-stack of 2D tiles - each source's own z position must still
+    reach the shapes/overlap-shapes preview as a real 'z' coordinate, not be silently dropped.
+    The production (self.view_msims) path gets this via make_msims_3d(); build_source_shape_sim()
+    must produce the same result via its own promote_z=True, without ever building a real msim."""
+    from muvis_align.image.util import build_source_msim, build_source_shape_sim, make_msims_3d, \
+        create_image_shapes, create_overlap_shapes
+    from muvis_align.util import create_transform
+
+    transform_key = 'source_metadata'
+    output_order = 'yx'  # every source is natively 2D - output_order itself carries no 'z'
+    sources = [TiffImageSource(str(DATA_DIR / f)) for f in TIFF_FILES[:2]]
+    translations = [{'x': 0.0, 'y': 0.0, 'z': 0.0}, {'x': 50.0, 'y': 30.0, 'z': 10.0}]
+    rotations = [0, 0]
+
+    real_sims, cheap_sims = [], []
+    for index, (source, translation, rotation) in enumerate(zip(sources, translations, rotations)):
+        transform = param_utils.invert_coordinate_order(
+            create_transform(translation, rotation, matrix_size=3))
+        real_msim = build_source_msim(source, output_order, translation, transform, transform_key)
+        promoted_msim = make_msims_3d([real_msim], positions=[translation])[0]
+        real_sims.append(msi_utils.get_sim_from_msim(promoted_msim, scale='scale0'))
+        cheap_sims.append(build_source_shape_sim(source, output_order, translation, transform,
+                                                  transform_key, promote_z=True))
+
+    for sim, expected_z in zip(real_sims, [0.0, 10.0]):
+        assert 'z' in sim.dims
+        assert si_utils.get_origin_from_sim(sim)['z'] == pytest.approx(expected_z)
+    for sim, expected_z in zip(cheap_sims, [0.0, 10.0]):
+        assert 'z' in sim.dims
+        assert si_utils.get_origin_from_sim(sim)['z'] == pytest.approx(expected_z)
+
+    real_shapes = create_image_shapes(real_sims, transform_key=transform_key)
+    cheap_shapes = create_image_shapes(cheap_sims, transform_key=transform_key)
+    assert len(real_shapes) == len(cheap_shapes) == 2
+    for real_shape, cheap_shape in zip(real_shapes, cheap_shapes):
+        np.testing.assert_allclose(real_shape, cheap_shape)
+        # a promoted 2D tile's box must show its own real z, not a dropped/default 0
+        assert np.asarray(real_shape).shape[1] == 3
+
+    real_overlap_shapes, real_pairs = create_overlap_shapes(real_sims, transform_key=transform_key)
+    cheap_overlap_shapes, cheap_pairs = create_overlap_shapes(cheap_sims, transform_key=transform_key)
+    assert [tuple(pair) for pair in real_pairs] == [tuple(pair) for pair in cheap_pairs]
+    for real_shape, cheap_shape in zip(real_overlap_shapes, cheap_overlap_shapes):
+        np.testing.assert_allclose(real_shape, cheap_shape)
+
+
 @pytest.mark.parametrize('filename', ZARR_FILES)
 def test_zarr_image_source_never_extracts_sims_or_populates_data(filename):
     """ZarrImageSource works entirely off self.msim - it never calls msi_utils.get_sim_from_msim

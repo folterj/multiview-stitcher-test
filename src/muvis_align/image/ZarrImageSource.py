@@ -14,8 +14,8 @@ class ZarrImageSource(ImageSource):
         # get_spacing_from_sim/get_origin_from_sim only ever look at .dims/.coords, so there's no
         # need to go through msi_utils.get_sim_from_msim (which additionally attaches transform
         # attrs we don't need here) just to read metadata.
-        self.msim = ngff_utils.read_msim_from_ome_zarr(self.filename, array_backend='dask',
-                                                       transform_key=self.transform_key)
+        self._msim = ngff_utils.read_msim_from_ome_zarr(self.filename, array_backend='dask',
+                                                        transform_key=self.transform_key)
         scale_keys = msi_utils.get_sorted_scale_keys(self.msim)
         images = [self.msim[scale_key].ds['image'] for scale_key in scale_keys]
         image0 = images[0]
