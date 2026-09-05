@@ -689,6 +689,7 @@ def test_input_output_process_resolves_relative_paths_before_reg_init(bare_inter
         input_path=expected_input,
         output_path=expected_output,
         overwrite=True,
+        verbose=False,
     )
 
 

@@ -49,6 +49,12 @@ class MVSRegistration:
                  source_metadata={}, extra_metadata={},
                  global_rotation=None, global_center=None,
                  overwrite=True, clear=False, ui='', verbose=False, debug=False):
+        # set here (rather than only in init(), below) so verbose/logging_dask/logging_time are
+        # always defined, even for an instance that never gets init() called on it (e.g. Interface's
+        # placeholder self.reg before a project is loaded)
+        self.verbose = verbose
+        self.logging_dask = self.verbose
+        self.logging_time = self.verbose
         self.reset()
 
         if input_path is not None:

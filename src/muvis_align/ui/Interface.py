@@ -25,6 +25,7 @@ from muvis_align.image.util import get_sim_physical_size, get_sim_position_final
 from muvis_align.file.resources import get_project_template
 from muvis_align.logging import init_logging
 from muvis_align.metrics import calc_msims_metrics
+from muvis_align.Timer import Timer
 from muvis_align.ui.NapariDaskProgress import NapariDaskProgress
 from muvis_align.ui.NapariMVSProgress import NapariMVSProgress
 from muvis_align.ui.NapariPreprocessProgress import NapariPreprocessProgress
@@ -244,7 +245,8 @@ class Interface:
             input_path = resolve_to_project_dir(params['input_path'], project_dir)
             ok = self.reg.init(input_path=eval_path(input_path),
                                output_path=output,
-                               overwrite=params['overwrite'])
+                               overwrite=params['overwrite'],
+                               verbose=self.verbose)
             if ok:
                 # init_progress(), right below, always ends by drawing the view (with
                 # whatever transform its own registration-state check picks) - drawing here
@@ -501,6 +503,12 @@ class Interface:
         self.viewer.dims.ndisplay = ndisplay
         #self.overview._qtwidget._viewer_model.dims.ndisplay = ndisplay
 
+    def _timing_verbose(self):
+        # a few view-update methods below are unit-tested against a bare Interface with no
+        # self.reg at all (e.g. _napari_view_add_fused_data) - fall back to no timing logging
+        # rather than requiring self.reg just to gate these diagnostic Timer() calls
+        return getattr(getattr(self, 'reg', None), 'logging_time', False)
+
     def update_views(self, transform_key=None, show_preprocessed=False, show_images=True):
         if transform_key is None:
             transform_key = self.get_best_transform_key()
@@ -508,7 +516,8 @@ class Interface:
         is_3d = (self.reg.sources[0].get_size().get('z', 0) > 1)
         is_multi_z_shapes = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
         force_2d = is_multi_z_shapes and not is_3d
-        shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=force_2d)
+        with Timer('update_views: create shapes', verbose=self._timing_verbose()):
+            shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=force_2d)
 
         self._clear_napari_view(self.viewer)
         # before pre-processing has run, only shapes are ever shown (show_images=False) - the
@@ -516,12 +525,16 @@ class Interface:
         # _create_napari_data()), so showing it only once pre-processing/registration has
         # actually happened is also what keeps that cost from ever blocking initial project load
         if show_images:
-            data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
+            with Timer('update_views: create fused data', verbose=self._timing_verbose()):
+                data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
             if data is not None:
-                self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
-        self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
+                with Timer('update_views: add fused data to viewer', verbose=self._timing_verbose()):
+                    self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
+        with Timer('update_views: add shapes to viewer', verbose=self._timing_verbose()):
+            self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
 
-        self._refresh_overview_shapes(transform_key, shapes, refs, labels, face_colors, is_3d=is_3d)
+        with Timer('update_views: refresh overview shapes', verbose=self._timing_verbose()):
+            self._refresh_overview_shapes(transform_key, shapes, refs, labels, face_colors, is_3d=is_3d)
         self.view_mode = ViewMode.OVERVIEW
 
     def _refresh_overview_shapes(self, transform_key, shapes=None, refs=None, labels=None,
@@ -558,16 +571,20 @@ class Interface:
             # a real 'z' dim on its sim - otherwise it's silently dropped instead of drawn at its
             # actual z.
             promote_z = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
-            msims = [
-                build_source_shape_sim(source, self.reg._msim_output_order, translation, transform,
-                                       transform_key, z_scale=self.reg._msim_z_scale, promote_z=promote_z)
-                for source, translation, transform in
-                zip(self.reg.sources, self.reg.positions, self.reg._msim_transforms)
-            ]
+            with Timer(f'_create_napari_shapes: build {len(self.reg.sources)} source shape sims',
+                      verbose=self._timing_verbose()):
+                msims = [
+                    build_source_shape_sim(source, self.reg._msim_output_order, translation, transform,
+                                           transform_key, z_scale=self.reg._msim_z_scale, promote_z=promote_z)
+                    for source, translation, transform in
+                    zip(self.reg.sources, self.reg.positions, self.reg._msim_transforms)
+                ]
         else:
-            msims = self.view_msims
+            with Timer('_create_napari_shapes: get view_msims', verbose=self._timing_verbose()):
+                msims = self.view_msims
 
-        shapes = create_image_shapes(msims, transform_key=transform_key, force_2d=force_2d)
+        with Timer(f'_create_napari_shapes: create_image_shapes ({len(msims)} images)', verbose=self._timing_verbose()):
+            shapes = create_image_shapes(msims, transform_key=transform_key, force_2d=force_2d)
         refs = [str(index) for index in range(len(msims))]
         labels = list(self.reg.file_labels)
         face_colors = [(1, 1, 1) for _ in range(len(msims))]
@@ -579,8 +596,10 @@ class Interface:
         # drawn. Before registration there's no graph yet, so fall back to every
         # geometrically-overlapping pair (create_overlap_shapes' own default).
         overlap_pairs = list(self.reg.pairs_graph.edges()) if self.reg.is_pairs_registered() else None
-        shapes2, pairs = create_overlap_shapes(msims, transform_key=transform_key, pairs=overlap_pairs,
-                                               force_2d=force_2d)
+        with Timer(f'_create_napari_shapes: create_overlap_shapes ({len(msims)} images,'
+                  f' {len(overlap_pairs) if overlap_pairs is not None else "all"} pairs)', verbose=self._timing_verbose()):
+            shapes2, pairs = create_overlap_shapes(msims, transform_key=transform_key, pairs=overlap_pairs,
+                                                   force_2d=force_2d)
         shapes.extend(shapes2)
         refs += [f'{index1} {index2}' for index1, index2 in pairs]
         labels += ['' for _ in pairs]
@@ -590,7 +609,9 @@ class Interface:
     def _create_napari_data(self, transform_key, fusion_method='additive', show_preprocessed=False):
         if show_preprocessed:
             # copy to avoid transform changes below leaking into the stored register_msims
-            msims = [msim.copy(deep=True) for msim in self.reg.register_msims]
+            with Timer(f'_create_napari_data: copy {len(self.reg.register_msims)} register_msims',
+                      verbose=self._timing_verbose()):
+                msims = [msim.copy(deep=True) for msim in self.reg.register_msims]
         else:
             # view_msims (unlike register_msims) is never scale-reduced - every source's full
             # native pyramid, un-preprocessed. Fusing that at native/scale0 resolution just to
@@ -600,8 +621,13 @@ class Interface:
             # Reduce to the same kind of coarse sub-pyramid MVSRegistration.create_preview() already
             # uses for its own (exported) preview, rather than fusing every level of every source.
             preview_scale = self.params['input_output'].get('preview_scale', default_interactive_preview_scale)
-            msims = select_msim_subpyramid_at_scale(self.view_msims, self.reg.sources, preview_scale)
-        copy_transforms_to_msims(self.reg.msims, msims, transform_key)
+            with Timer('_create_napari_data: build view_msims', verbose=self._timing_verbose()):
+                view_msims = self.view_msims
+            with Timer(f'_create_napari_data: select_msim_subpyramid_at_scale ({len(view_msims)} images)',
+                      verbose=self._timing_verbose()):
+                msims = select_msim_subpyramid_at_scale(view_msims, self.reg.sources, preview_scale)
+        with Timer('_create_napari_data: copy_transforms_to_msims', verbose=self._timing_verbose()):
+            copy_transforms_to_msims(self.reg.msims, msims, transform_key)
         # A source chunked one z-slice at a time on disk would otherwise propagate that
         # z=1 chunking into every pyramid level of the preview (each level then has as many
         # dask tasks in z as there are z-slices, even once XY has been downsampled to a
@@ -621,12 +647,13 @@ class Interface:
         if len(set(z_positions)) > 1 and 'z' not in spatial_dims:
             spatial_dims = ['z'] + spatial_dims
         output_chunksize = get_chunk_sizes(image0.dtype, spatial_dims)
-        fused_msim, _ = self.reg.fuse(msims,
-                                      transform_key=transform_key,
-                                      fusion_method=fusion_method,
-                                      dimension=self.params['input_output']['registration_dimension'],
-                                      extra_metadata=self.extra_metadata,
-                                      output_chunksize=output_chunksize)
+        with Timer(f'_create_napari_data: fuse ({len(msims)} images)', verbose=self._timing_verbose()):
+            fused_msim, _ = self.reg.fuse(msims,
+                                          transform_key=transform_key,
+                                          fusion_method=fusion_method,
+                                          dimension=self.params['input_output']['registration_dimension'],
+                                          extra_metadata=self.extra_metadata,
+                                          output_chunksize=output_chunksize)
         return fused_msim
 
     def _update_view_add_shapes(self, viewer, shapes, refs, labels, face_colors, layer_name):
@@ -755,6 +782,14 @@ class Interface:
         channels = self.extra_metadata.get('channels', [])
 
         if isinstance(fused, list):
+            # 'compose' mode: no real fusion, one separate napari layer per source - for
+            # hundreds of sources this means hundreds of individual add_image() calls, each
+            # running synchronously on the GUI thread (contrast/thumbnail setup included), with
+            # nothing yielding back to Qt in between - a likely source of both the long,
+            # unresponsive wait and the many per-layer copies driving memory up
+            add_image_timer = Timer(f'_napari_view_add_fused_data: add_image loop ({len(fused)} layers)',
+                                    verbose=self._timing_verbose())
+            add_image_timer.start()
             for msim, channel in zip(fused, channels or [{}] * len(fused)):
                 image0 = get_msim_image0(msim)
                 scale = si_utils.get_spacing_from_sim(image0, asarray=True)
@@ -764,13 +799,16 @@ class Interface:
                                  multiscale=True, colormap=channel.get('color', (1, 1, 1, 1)),
                                  contrast_limits=contrast_limits,
                                  scale=scale, translate=translate, blending='additive')
+                add_image_timer.record()
+            add_image_timer.get_total_time()
             return
 
         image0 = get_msim_image0(fused)
         scale = si_utils.get_spacing_from_sim(image0, asarray=True)
         translate = si_utils.get_origin_from_sim(image0, asarray=True)
         data = get_msim_level_data(fused)
-        contrast_limits = get_contrast_limits(fused)
+        with Timer('_napari_view_add_fused_data: get_contrast_limits', verbose=self._timing_verbose()):
+            contrast_limits = get_contrast_limits(fused)
         if len(channels) > 1 and 'c' in image0.dims:
             channel_axis = image0.dims.index('c')
             name = [channel.get('label', index) for index, channel in enumerate(channels)]
@@ -782,9 +820,10 @@ class Interface:
             channel_axis = None
             name = channels[0].get('label') if channels else None
             colormap = channels[0].get('color', (1, 1, 1, 1)) if channels else None
-        viewer.add_image(data, name=name or layer_name, multiscale=True, channel_axis=channel_axis,
-                         colormap=colormap, contrast_limits=contrast_limits,
-                         scale=scale, translate=translate)
+        with Timer('_napari_view_add_fused_data: add_image', verbose=self._timing_verbose()):
+            viewer.add_image(data, name=name or layer_name, multiscale=True, channel_axis=channel_axis,
+                             colormap=colormap, contrast_limits=contrast_limits,
+                             scale=scale, translate=translate)
 
     def _napari_view_show_features(self, viewer, fixed_data2, fixed_points, moving_data2, moving_points, matches, inliers):
         layers = draw_keypoints_matches_napari(fixed_data2, fixed_points,
