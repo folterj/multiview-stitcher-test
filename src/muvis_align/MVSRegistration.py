@@ -1,6 +1,7 @@
 # https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
 # https://github.com/pydata/xarray/issues/8828
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 import copy
 import dask
@@ -393,46 +394,70 @@ class MVSRegistration:
     def init_sources(self, progress_factory=None):
         source_metadata0 = self.source_metadata
         source_metadata = {}
-        self.sources = []
-        matrix_size = None
+        nfiles = len(self.filenames)
+        self.sources = [None] * nfiles
         progress_context = (
-            progress_factory(total=len(self.filenames), desc='Initialising sources')
+            progress_factory(total=nfiles, desc='Initialising sources')
             if progress_factory is not None
             else nullcontext(None)
         )
+        # resolve each file's own source_metadata up front (cheap, in-memory) - `source_metadata`
+        # is reused/mutated across iterations below (matching the previous sequential behaviour),
+        # so each file gets its own snapshot rather than a shared dict that the source
+        # construction below (parallelised, so no longer necessarily reading it immediately) could
+        # see mutated to a later file's values
+        per_file_metadata = []
+        for index, label in enumerate(self.file_labels):
+            if isinstance(source_metadata0, dict) and label in source_metadata0:
+                source_metadata = source_metadata0[label]
+                position, rotation, scale = get_properties_from_transform(param_utils.affine_to_xaffine(np.array(source_metadata)))
+                source_metadata = {'position': position, 'rotation': rotation, 'scale': xyz_to_dict([scale, scale])}
+            else:
+                if 'position' in source_metadata0:
+                    translation = source_metadata0['position']
+                    if isinstance(translation, list):
+                        translation = translation[index]
+                    source_metadata['position'] = translation
+                if 'scale' in source_metadata0:
+                    scale = source_metadata0['scale']
+                    if isinstance(scale, list):
+                        scale = scale[index]
+                    source_metadata['scale'] = scale
+                if 'rotation' in source_metadata0:
+                    source_metadata['rotation'] = source_metadata0['rotation']
+            if isinstance(source_metadata0, dict):
+                # blanket per-run flags that apply identically to every source
+                for flag in ('sbem', 'invert', 'is_center'):
+                    if flag in source_metadata0:
+                        source_metadata[flag] = source_metadata0[flag]
+            per_file_metadata.append(copy.deepcopy(source_metadata))
+
         with progress_context as pbar:
-            for index, (filename, label) in enumerate(zip(self.filenames, self.file_labels)):
-                if isinstance(source_metadata0, dict) and label in source_metadata0:
-                    source_metadata = source_metadata0[label]
-                    position, rotation, scale = get_properties_from_transform(param_utils.affine_to_xaffine(np.array(source_metadata)))
-                    source_metadata = {'position': position, 'rotation': rotation, 'scale': xyz_to_dict([scale, scale])}
-                else:
-                    if 'position' in source_metadata0:
-                        translation = source_metadata0['position']
-                        if isinstance(translation, list):
-                            translation = translation[index]
-                        source_metadata['position'] = translation
-                    if 'scale' in source_metadata0:
-                        scale = source_metadata0['scale']
-                        if isinstance(scale, list):
-                            scale = scale[index]
-                        source_metadata['scale'] = scale
-                    if 'rotation' in source_metadata0:
-                        source_metadata['rotation'] = source_metadata0['rotation']
-                if isinstance(source_metadata0, dict):
-                    # blanket per-run flags that apply identically to every source
-                    for flag in ('sbem', 'invert', 'is_center'):
-                        if flag in source_metadata0:
-                            source_metadata[flag] = source_metadata0[flag]
-                source = create_image_source(filename, source_metadata, extra_metadata=self.extra_metadata,
-                                             file_label=label, transform_key=self.source_transform_key,
-                                             matrix_size=matrix_size)
-                if matrix_size is None:
-                    # decided once from the first source, matching the previous is_3d-from-source0 behaviour
-                    matrix_size = 4 if source.get_size().get('z', 0) > 1 else 3
-                self.sources.append(source)
-                if pbar is not None:
-                    pbar.update(1)
+            def build_source(index, matrix_size):
+                return create_image_source(
+                    self.filenames[index], per_file_metadata[index], extra_metadata=self.extra_metadata,
+                    file_label=self.file_labels[index], transform_key=self.source_transform_key,
+                    matrix_size=matrix_size)
+
+            # matrix_size is decided once from the first source (matching the previous
+            # is_3d-from-source0 behaviour) - build it on its own first, so every other source
+            # below can be constructed with that already-known matrix_size from the start
+            first_source = build_source(0, matrix_size=None)
+            matrix_size = 4 if first_source.get_size().get('z', 0) > 1 else 3
+            self.sources[0] = first_source
+            if pbar is not None:
+                pbar.update(1)
+
+            if nfiles > 1:
+                max_workers = min(default_source_init_workers, nfiles - 1)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(build_source, index, matrix_size): index
+                              for index in range(1, nfiles)}
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        self.sources[index] = future.result()
+                        if pbar is not None:
+                            pbar.update(1)
 
     def init_data(self, source_metadata={}, extra_metadata={}, z_scale=None, target_scale=None, store=True,
                   progress_factory=None):

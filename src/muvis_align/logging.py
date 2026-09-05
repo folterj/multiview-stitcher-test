@@ -13,7 +13,11 @@ def init_logging(log_filename='log/muvis-align.log', log_format='%(asctime)s %(l
     handlers = [logging.FileHandler(log_filename, encoding='utf-8')]
     if verbose:
         handlers += [logging.StreamHandler()]
-    logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers, encoding='utf-8', force=True)
+    # the root logger's own level gates every logging.debug(...) call regardless of verbose -
+    # setting individual module loggers to DEBUG below (e.g. multiview_stitcher.registration)
+    # only helps once records get past this level first
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format=log_format,
+                        handlers=handlers, encoding='utf-8', force=True)
 
     # verbose external modules
     if verbose:

@@ -1577,6 +1577,36 @@ def create_image_shapes(sims, transform_key=None,  force_2d=False):
     return shapes
 
 
+def _filter_candidate_overlap_pairs(sims, transform_key):
+    """Every-pair candidates (np.triu_indices), narrowed to those whose axis-aligned bounding
+    boxes actually overlap - a cheap, vectorized numpy broad phase in front of
+    _get_overlap_bboxes' exact (linear-programming-based) intersection test, which is the
+    expensive part: on an n-source project with no pair_registration graph yet to restrict
+    candidates to (e.g. initial project load), the naive O(n^2) full pair set spends that solve
+    on the vast majority of pairs that don't overlap at all, dominating redraw time once there
+    are more than a few dozen sources. An AABB always contains the real (possibly rotated) box,
+    so filtering on it can never drop a pair that genuinely overlaps.
+    """
+    mins = np.empty((len(sims), 3))
+    maxs = np.empty((len(sims), 3))
+    for index, sim in enumerate(sims):
+        if 't' in sim.dims:
+            sim = sim.sel(t=0)
+        stack_props = si_utils.get_stack_properties_from_sim(sim, transform_key=transform_key)
+        points = mv_graph.get_vertices_from_stack_props(stack_props)
+        ndims = points.shape[1]
+        mins[index] = 0
+        maxs[index] = 0
+        mins[index, :ndims] = points.min(axis=0)
+        maxs[index, :ndims] = points.max(axis=0)
+    overlaps = (
+        np.all(mins[:, None, :] <= maxs[None, :, :], axis=-1)
+        & np.all(mins[None, :, :] <= maxs[:, None, :], axis=-1)
+    )
+    iu = np.triu_indices(len(sims), 1)
+    return np.transpose(iu)[overlaps[iu]]
+
+
 def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
     # accepts sims or msims - only position/size metadata is read, never pixel data
     sims = sims_from_sims_or_msims(sims)
@@ -1584,7 +1614,7 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
     good_pairs = []
     is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(sim).get('z', 0) for sim in sims])) > 1)
     if pairs is None:
-        pairs = np.transpose(np.triu_indices(len(sims), 1))
+        pairs = _filter_candidate_overlap_pairs(sims, transform_key)
     for pair in pairs:
         sim1 = squeeze_sim_transform_time(sims[pair[0]], transform_key)
         sim2 = squeeze_sim_transform_time(sims[pair[1]], transform_key)
