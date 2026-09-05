@@ -6,12 +6,10 @@ fusion:
   tile_size: 1024,1024
 input_output:
   coordinate_system: source_metadata
-  input_path: C:\Users\Y\PycharmProjects\muvis-align\data\S000\*.zarr
+  input_path: data/S000/*.zarr
   metadata_table: []
-  output_path: C:\Users\Y\PycharmProjects\muvis-align\output
+  output_path: output
   overwrite: true
-  preview_images: true
-  preview_shapes: true
   source_position_x: source
   source_position_y: source
   source_position_z: source

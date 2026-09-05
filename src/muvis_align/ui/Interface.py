@@ -17,7 +17,7 @@ from muvis_align.constants import zarr_extension, default_transform_key, default
 from muvis_align.file.project_yaml import read_params, get_template_params, write_params, update_params
 from muvis_align.MVSRegistration import MVSRegistration, RegState
 from muvis_align.image.util import get_sim_physical_size, get_sim_position_final, \
-    create_image_shapes, create_overlap_shapes, \
+    create_image_shapes, create_overlap_shapes, build_source_shape_sim, \
     draw_keypoints_matches_napari, get_transforms, copy_transforms_to_msims, \
     make_msims_3d, metric_to_rgb, get_msim_level_data, get_contrast_limits, get_chunk_sizes, \
     get_msim_image0, wrap_sims_as_msims, extract_sims_from_fused, extract_sims_from_msims, \
@@ -81,6 +81,7 @@ class Interface:
         self.view_mode = None
         self.selected_shape_index = None
         self._preview_overlap_cache = None
+        self._view_msims = None
         self.reg.reset()
         self._clear_napari_view(self.overview)
         self._clear_napari_view(self.viewer)
@@ -294,9 +295,10 @@ class Interface:
         else:
             # No prior registration to view with a specific transform - this is the one
             # draw update_metadata_source()'s own (skipped, see input_output_process())
-            # would otherwise have done for a brand-new project.
+            # would otherwise have done for a brand-new project. No pre-processing has run
+            # yet, so only shapes are shown - see update_views()'s show_images param.
             self.enable_tabs(True, 2)
-            self.update_views()
+            self.update_views(show_images=False)
 
     def update_metadata_source(self, skip_view_update=False):
         if not self.reg.is_pairs_registered():
@@ -316,29 +318,51 @@ class Interface:
                 logging.exception('Unable to read source data')
                 return False
 
-            # view_msims backs both the napari image data layer and the shapes, which read
-            # cheap position/size metadata off it via get_msim_image0
-            self.view_msims = self._build_view_msims()
+            # the expensive part - actually building each source's multiscale msim (and, for a
+            # multi-z stack, wrapping the whole set into a 3D volume) - is deferred to the lazy
+            # view_msims property below, only forced once something genuinely needs pixel-shaped
+            # data (the fused image preview, once shown after pre-processing). The z-index
+            # remapping itself is cheap (plain dict/set bookkeeping) and stays eager here so
+            # self.reg.positions is immediately correct for shapes, drawn instantly either way.
             z_positions = sorted(set([position.get('z', 0) for position in self.reg.positions]))
-            is_multi_z_shapes = (len(z_positions) > 1)
-            if is_multi_z_shapes:
-                positions = []
+            if len(z_positions) > 1:
                 for position in self.reg.positions:
                     position['z'] = z_positions.index(position.get('z', 0))
-                    positions.append(position)
-                self.view_msims = make_msims_3d(self.view_msims, positions=positions)
-        coord_systems = get_transforms(self.reg.msims)
+            self._view_msims = None
+        # this function only ever runs pre-registration (both call sites guard on
+        # `not self.reg.is_pairs_registered()`), so self.reg.source_transform_key is the only
+        # transform key that can exist yet - no need to force self.reg.msims just to read it
+        # off a msim that would say the same thing
+        coord_systems = [self.reg.source_transform_key]
         self.populate_channels()
         self.populate_coordinate_systems(coord_systems)
         if self.update_output_channels():
             self.populate_channels_table()
         if self.reg.is_initialised():
-            self.populate_metadata_table(self.reg.msims)
+            # populate_metadata_table() never reads its first arg when transform_keys is None
+            # (it reads self.reg.positions/scales directly) - passing None instead of
+            # self.reg.msims avoids forcing the expensive msim build just for this call
+            self.populate_metadata_table(None)
             self.check_3d_view()
             if not skip_view_update:
-                self.update_views()
+                self.update_views(show_images=False)
 
         return True
+
+    @property
+    def view_msims(self):
+        # per-source msim for the napari image data layer - built lazily, only once something
+        # (the fused image preview) actually needs it; shapes no longer depend on this at all
+        # (see _create_napari_shapes(), which builds its own cheap per-source sims directly)
+        if self._view_msims is None:
+            self._view_msims = self._build_view_msims()
+            if len(set(position.get('z', 0) for position in self.reg.positions)) > 1:
+                self._view_msims = make_msims_3d(self._view_msims, positions=self.reg.positions)
+        return self._view_msims
+
+    @view_msims.setter
+    def view_msims(self, value):
+        self._view_msims = value
 
     def _build_view_msims(self):
         # per-source msim for the napari image data layer: a source with a native multi-
@@ -368,7 +392,12 @@ class Interface:
                                       min_duration=0.1) as progress_factory, \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
              VisibleActivityDock(self.viewer):
-            _, _, modified = self.reg.preprocess(self.reg.msims,
+            # self.reg.msims is built lazily (see MVSRegistration.msims) - building it here
+            # explicitly, through ensure_msims(), gives that per-source construction its own
+            # progress reporting instead of it happening silently (no progress feedback) as a
+            # side effect of evaluating `self.reg.msims` as a plain argument below
+            msims = self.reg.ensure_msims(progress_factory=progress_factory)
+            _, _, modified = self.reg.preprocess(msims,
                                                  progress_factory=progress_factory,
                                                  **params_features)
         self.pre_processing_performed = modified
@@ -451,6 +480,10 @@ class Interface:
         widget2.set_value(labels[index], choices=labels)
 
     def get_best_transform_key(self):
+        if not self.reg.is_pairs_registered():
+            # only self.reg.source_transform_key can exist yet - avoid forcing the expensive
+            # msim build (get_transforms() needs self.reg.msims) just to learn that
+            return self.reg.source_transform_key
         transforms = get_transforms(self.reg.msims)
         if self.reg.reg_transform_key in transforms:
             transform_key = self.reg.reg_transform_key
@@ -468,27 +501,25 @@ class Interface:
         self.viewer.dims.ndisplay = ndisplay
         #self.overview._qtwidget._viewer_model.dims.ndisplay = ndisplay
 
-    def update_views(self, transform_key=None, show_preprocessed=False):
+    def update_views(self, transform_key=None, show_preprocessed=False, show_images=True):
         if transform_key is None:
             transform_key = self.get_best_transform_key()
 
-        is_3d = (get_msim_image0(self.reg.msims[0]).sizes.get('z', 0) > 1)
-        is_multi_z_shapes = (
-            len(set([
-                si_utils.get_origin_from_sim(get_msim_image0(msim)).get('z', 0)
-                for msim in self.view_msims
-            ])) > 1
-        )
+        is_3d = (self.reg.sources[0].get_size().get('z', 0) > 1)
+        is_multi_z_shapes = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
         force_2d = is_multi_z_shapes and not is_3d
         shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=force_2d)
 
         self._clear_napari_view(self.viewer)
-        if self.params['input_output']['preview_images']:
+        # before pre-processing has run, only shapes are ever shown (show_images=False) - the
+        # fused image preview always needs every source's real msim built (see
+        # _create_napari_data()), so showing it only once pre-processing/registration has
+        # actually happened is also what keeps that cost from ever blocking initial project load
+        if show_images:
             data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
             if data is not None:
                 self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
-        if self.params['input_output']['preview_shapes']:
-            self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
+        self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
 
         self._refresh_overview_shapes(transform_key, shapes, refs, labels, face_colors, is_3d=is_3d)
         self.view_mode = ViewMode.OVERVIEW
@@ -500,7 +531,7 @@ class Interface:
         # nothing loaded yet) - a genuinely 3D shape set (drawn as oriented 3D boxes for the
         # main viewer) needs recomputing with force_2d=True for it instead of being reused as-is
         if is_3d is None:
-            is_3d = (get_msim_image0(self.reg.msims[0]).sizes.get('z', 0) > 1)
+            is_3d = (self.reg.sources[0].get_size().get('z', 0) > 1)
         if shapes is None or is_3d:
             shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=True)
         self._clear_napari_view(self.overview)
@@ -514,7 +545,27 @@ class Interface:
             viewer.layers.clear()
 
     def _create_napari_shapes(self, transform_key, force_2d=False):
-        msims = self.view_msims
+        if transform_key == self.reg.source_transform_key:
+            # not yet registered (or explicitly asking for original positions) - build cheap,
+            # single-level sims straight from the already-resolved per-source geometry, never
+            # touching self.reg.msims/self.view_msims (the expensive multiscale msim build) -
+            # any other transform_key (e.g. 'registered') means registration has already run,
+            # so self.view_msims is legitimately available and carries that transform already
+            #
+            # promote_z mirrors the make_msims_3d() promotion self.view_msims itself gets: when
+            # output_order has no native 'z' (every source is individually 2D) but different
+            # sources sit at different z heights, each source's own z position must still become
+            # a real 'z' dim on its sim - otherwise it's silently dropped instead of drawn at its
+            # actual z.
+            promote_z = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
+            msims = [
+                build_source_shape_sim(source, self.reg._msim_output_order, translation, transform,
+                                       transform_key, z_scale=self.reg._msim_z_scale, promote_z=promote_z)
+                for source, translation, transform in
+                zip(self.reg.sources, self.reg.positions, self.reg._msim_transforms)
+            ]
+        else:
+            msims = self.view_msims
 
         shapes = create_image_shapes(msims, transform_key=transform_key, force_2d=force_2d)
         refs = [str(index) for index in range(len(msims))]
@@ -561,6 +612,14 @@ class Interface:
         # small z chunk from the byte budget instead, since z is what napari slices through.
         image0 = get_msim_image0(msims[0])
         spatial_dims = si_utils.get_spatial_dims_from_sim(image0)
+        # MVSRegistration.fuse() (below) promotes msims to 3D internally (make_msims_3d) whenever
+        # sources sit at more than one distinct z position, regardless of whether msims already
+        # has a 'z' dim here - output_chunksize must already account for that dim in that case,
+        # since fuse() computes its own output_stack_properties from the (by-then 3D) msims, not
+        # from whatever's passed in here as output_chunksize
+        z_positions = [position.get('z') for position in self.reg.positions if 'z' in position]
+        if len(set(z_positions)) > 1 and 'z' not in spatial_dims:
+            spatial_dims = ['z'] + spatial_dims
         output_chunksize = get_chunk_sizes(image0.dtype, spatial_dims)
         fused_msim, _ = self.reg.fuse(msims,
                                       transform_key=transform_key,
@@ -571,15 +630,19 @@ class Interface:
         return fused_msim
 
     def _update_view_add_shapes(self, viewer, shapes, refs, labels, face_colors, layer_name):
-        images0 = [get_msim_image0(msim) for msim in self.view_msims]
+        # is_3d/is_multi_z_shapes read cheap per-source metadata (self.reg.sources/positions)
+        # rather than self.view_msims, so drawing shapes never forces the expensive msim build
+        # this is otherwise deferred to the fused image preview / pre-processing
         bb_supported = True
         if isinstance(viewer, ViewerWidget):
             viewer = viewer._qtwidget._viewer_model
             bb_supported = False
-        is_3d = (images0[0].sizes.get('z', 0) > 1)
-        is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(image0).get('z', 0) for image0 in images0])) > 1)
+        is_3d = (self.reg.sources[0].get_size().get('z', 0) > 1)
+        is_multi_z_shapes = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
         force_2d = not bb_supported or (is_multi_z_shapes and not is_3d)
-        do_3d = ('z' in images0[0].dims and not force_2d)
+        # a shape actually carries a 'z' coordinate whenever the source is natively a z-stack
+        # (is_3d) or build_source_shape_sim()/make_msims_3d() promoted it to one (is_multi_z_shapes)
+        do_3d = ((is_3d or is_multi_z_shapes) and not force_2d)
 
         if len(shapes) > 0:
             # Depth-tested 'translucent' made overlap boxes lose to the opaque fused image
@@ -1063,9 +1126,13 @@ class Interface:
             self.update_registered(view_transform_key=self.reg.reg_transform_key)
             QMessageBox.information(None, 'muvis-align', completion_message)
 
+    @catch_run_errors
     def preview_fusion(self):
         transform_key = self.reg.reg_transform_key
-        data = self._create_napari_data(transform_key, fusion_method=self.params['fusion']['method'])
+        with NapariMVSProgress(tqdm_class=progress, desc='Fusion', patch_fusion=True), \
+             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
+             VisibleActivityDock(self.viewer):
+            data = self._create_napari_data(transform_key, fusion_method=self.params['fusion']['method'])
         self._clear_napari_view(self.viewer)
         self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
         self.view_mode = ViewMode.FUSED

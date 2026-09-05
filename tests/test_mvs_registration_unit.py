@@ -246,6 +246,35 @@ def test_check_progress_uses_most_advanced_available_state(
     assert registration.state is expected_state
 
 
+def test_init_data_defers_msim_construction_to_first_msims_read():
+    """init_data() should only resolve cheap per-source metadata (position/scale/rotation) -
+    the expensive per-source msim build (build_source_msim(), the actual bottleneck when
+    loading many tiles) must not run until something genuinely reads reg.msims."""
+    reg = MVSRegistration()
+    reg.init(
+        operation='register',
+        input_path=[
+            'data/S000/000_000_0.tiff',
+            'data/S000/000_001_0.tiff',
+        ],
+        output_path='../../output/test_init_data_defers_msims/',
+    )
+    reg.init_data()
+
+    # cheap metadata is already fully resolved...
+    assert reg._msims is None  # ... but the expensive msims list is not built yet
+    assert len(reg.positions) == 2
+    assert len(reg.scales) == 2
+    assert len(reg.rotations) == 2
+    assert all(source._msim is None for source in reg.sources)  # per-source msim deferred too
+
+    # reading reg.msims (the property) triggers the deferred build, on demand
+    msims = reg.msims
+    assert len(msims) == 2
+    assert reg._msims is msims
+    assert all(source._msim is not None for source in reg.sources)
+
+
 def test_select_pair_overlap_then_register_overlap_matches_register_pairs():
     """select_pair_overlap()/register_overlap() together replace the old single register_pair()
     call, split so a caller (e.g. a UI preview) can cache the overlap crop select_pair_overlap()

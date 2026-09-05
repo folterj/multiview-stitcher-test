@@ -166,28 +166,6 @@ parameters:
     append_value: False
     section_id: "input_output"
     mode: "beginner"
-  - name: preview_shapes
-    type: checkbox
-    label: "Preview shape data"
-    description: "If enabled, tiles will be displayed as shapes"
-    default: True
-    cli_tag: "--preview_shapes"
-    cli_order: 15
-    optional: True
-    append_value: False
-    section_id: "input_output"
-    mode: "beginner"
-  - name: preview_images
-    type: checkbox
-    label: "Preview image data"
-    description: "If enabled, tiles will be previewed as images"
-    default: True
-    cli_tag: "--preview_images"
-    cli_order: 16
-    optional: True
-    append_value: False
-    section_id: "input_output"
-    mode: "beginner"
 
     # pre-processing
   - name: scale

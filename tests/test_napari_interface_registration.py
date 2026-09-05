@@ -12,6 +12,7 @@ Each test is parameterized to run with different project configurations
 (muvis_align_project.yml, muvis_align_project2.yml, etc.).
 """
 
+import logging
 import os
 import tempfile
 import importlib
@@ -110,13 +111,20 @@ class TestNapariInterfaceRegistration:
             config_copy.write_text(project_config.read_text())
             
             interface.project_path(str(config_copy))
-            
+
             assert interface.params_path == str(config_copy)
             assert interface.params is not None
             assert 'registration' in interface.params
             assert 'fusion' in interface.params
             assert 'input_output' in interface.params
             assert 'pre_processing' in interface.params
+
+            # project_path() -> update_input_output_path() -> init_logging() opens a
+            # FileHandler on a log file inside tmpdir - it must be closed before this
+            # block exits, or Windows refuses to delete the still-open file on cleanup
+            for handler in logging.getLogger().handlers[:]:
+                handler.close()
+                logging.getLogger().removeHandler(handler)
 
     def test_project_params_structure(self, config_data):
         """Test that project configuration has expected structure."""
@@ -249,8 +257,6 @@ class TestNapariInterfaceRegistration:
         assert isinstance(input_output['input_path'], str)
         assert isinstance(input_output['output_path'], str)
         assert isinstance(input_output['overwrite'], bool)
-        assert isinstance(input_output['preview_images'], bool)
-        assert isinstance(input_output['preview_shapes'], bool)
 
     def test_preprocessing_params_validation(self, config_data):
         """Validate pre-processing parameters in config."""
@@ -912,13 +918,8 @@ def test_update_views_adds_enabled_preview_layers(
 ):
     bare_interface.viewer = MagicMock()
     bare_interface.overview = MagicMock()
-    bare_interface.reg.msims = bare_interface.view_msims
-    bare_interface.params = {
-        "input_output": {
-            "preview_images": True,
-            "preview_shapes": True,
-        }
-    }
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"z": 2})]
+    bare_interface.reg.positions = [{"z": 0}]
     bare_interface.reg.fileset_label = "sample"
     bare_interface.get_best_transform_key = MagicMock(
         return_value="registered"
@@ -981,32 +982,15 @@ def test_update_views_detects_multi_z_from_view_msims(
 ):
     bare_interface.viewer = MagicMock()
     bare_interface.overview = MagicMock()
-    bare_interface.reg.msims = [
-        SimpleNamespace(dims=("y", "x"), sizes={"y": 10, "x": 10})
-    ]
-    bare_interface.view_msims = [object(), object()]
-    bare_interface.params = {
-        "input_output": {"preview_images": False, "preview_shapes": False}
-    }
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"y": 10, "x": 10})]
+    bare_interface.reg.positions = [{"z": 0}, {"z": 1}]
     bare_interface._create_napari_shapes = MagicMock(
         return_value=([], [], [], [])
     )
     bare_interface._clear_napari_view = MagicMock()
     bare_interface._update_view_add_shapes = MagicMock()
-    preview_z = {
-        id(bare_interface.view_msims[0]): 0,
-        id(bare_interface.view_msims[1]): 1,
-    }
-    monkeypatch.setattr(
-        interface_module, "get_msim_image0", lambda msim: msim
-    )
-    monkeypatch.setattr(
-        interface_module.si_utils,
-        "get_origin_from_sim",
-        lambda sim: {"z": preview_z[id(sim)]},
-    )
 
-    bare_interface.update_views(transform_key="source_metadata")
+    bare_interface.update_views(transform_key="source_metadata", show_images=False)
 
     bare_interface._create_napari_shapes.assert_called_once_with(
         "source_metadata", force_2d=True
@@ -1024,6 +1008,8 @@ def test_update_napari_shapes_adds_3d_box_with_overlap_metadata(
     viewer = MagicMock()
     image_shape = np.arange(24, dtype=float).reshape(8, 3)
     overlap_shape = np.arange(24, 48, dtype=float).reshape(8, 3)
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"z": 2})]
+    bare_interface.reg.positions = [{"z": 0}]
     bare_interface.reg.get_metrics.return_value = 0.75
     create_shapes = MagicMock(return_value=[image_shape])
     create_overlaps = MagicMock(
@@ -1108,6 +1094,8 @@ def test_update_napari_shapes_3d_faces_are_axis_aligned_and_wind_outward(
     guarantee consistent outward winding even for an axis-aligned box - the per-face
     flip-if-inward correction must still catch and fix that."""
     viewer = MagicMock()
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"z": 2})]
+    bare_interface.reg.positions = [{"z": 0}]
     unit_cube = np.array([
         [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
         [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
@@ -1159,9 +1147,8 @@ def test_update_napari_shapes_3d_faces_are_axis_aligned_and_wind_outward(
 def test_update_napari_shapes_uses_shapes_layer_for_2d(
     bare_interface, monkeypatch
 ):
-    bare_interface.view_msims = [
-        SimpleNamespace(dims=("y", "x"), sizes={"y": 10, "x": 10})
-    ]
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"y": 10, "x": 10})]
+    bare_interface.reg.positions = [{"z": 0}]
     viewer = MagicMock()
     shape = np.zeros((4, 2))
     monkeypatch.setattr(
@@ -1636,6 +1623,48 @@ def test_build_view_msims_downscales_large_single_resolution_source():
     small_image0 = get_msim_image0(view_msims[1])
     assert small_image0.sizes['x'] == 500
     assert small_image0.sizes['y'] == 500
+
+
+def test_create_napari_data_show_preprocessed_handles_fuse_internal_3d_promotion(make_napari_viewer):
+    """MVSRegistration.fuse() promotes msims to 3D internally (make_msims_3d) whenever sources
+    sit at more than one distinct z position - regardless of whether register_msims (used when
+    show_preprocessed=True) already has a 'z' dim, which it doesn't for a plain 'register'
+    operation (is_stack=False) with every source individually 2D. _create_napari_data() must
+    still hand fuse() an output_chunksize that already accounts for the z dim fuse() is about to
+    add, or multiview_stitcher's own chunk-bbox computation crashes with KeyError('z')."""
+    from muvis_align.MVSRegistration import MVSRegistration
+
+    source_metadata = {
+        'position': {'z': 'fn[-2]', 'y': 0.0, 'x': 'fn[-2]*30'},
+        'scale': {'z': '1', 'y': '0.032', 'x': '0.032'},
+    }
+    reg = MVSRegistration()
+    reg.init(
+        operation='register',
+        input_path=[
+            'data/S000/000_000_0.tiff',
+            'data/S000/000_001_0.tiff',
+        ],
+        output_path='../../output/test_fuse_3d_promotion/',
+        source_metadata=source_metadata,
+    )
+    reg.init_data(source_metadata=source_metadata)
+    assert len(set(p.get('z') for p in reg.positions)) > 1  # sanity check: genuinely multi-z
+    reg.preprocess(reg.msims, scale=None, flatfield_quantiles='', normalisation='none',
+                   filter_foreground=False)
+    assert 'z' not in reg.register_msims[0]['scale0'].ds['image'].dims  # sanity check: not yet 3D
+
+    interface = Interface.__new__(Interface)
+    interface.reg = reg
+    interface.params = {'input_output': {'registration_dimension': 'space'}}
+    interface.extra_metadata = {}
+
+    fused_msim = interface._create_napari_data(
+        reg.source_transform_key, show_preprocessed=True
+    )
+
+    assert 'z' in fused_msim['scale0'].ds['image'].dims
+    assert fused_msim['scale0'].ds['image'].sizes['z'] == 2
 
 
 def test_preview_data_layer_is_real_multiscale_pyramid(make_napari_viewer):

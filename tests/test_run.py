@@ -36,7 +36,8 @@ def test_msims_pyramid_levels_shrink(resource_file):
     operation_params = params['operations'][0]
     reg = MVSRegistration()
     reg.init_params(params['general'], operation_params)
-    msims = reg.init_data()  # msims is init_data()'s primary return value
+    reg.init_data()
+    msims = reg.msims  # msims are built lazily - reg.msims is the property that builds them
 
     for msim in msims:
         scale_keys = msi_utils.get_sorted_scale_keys(msim)

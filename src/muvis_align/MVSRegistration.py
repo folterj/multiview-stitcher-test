@@ -1,6 +1,7 @@
 # https://stackoverflow.com/questions/62806175/xarray-combine-by-coords-return-the-monotonic-global-index-error
 # https://github.com/pydata/xarray/issues/8828
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 import copy
 import dask
@@ -55,6 +56,42 @@ class MVSRegistration:
                       source_metadata=source_metadata, extra_metadata=extra_metadata,
                       global_rotation=global_rotation, global_center=global_center,
                       overwrite=overwrite, clear=clear, ui=ui, verbose=verbose, debug=debug)
+
+    @property
+    def msims(self):
+        # built lazily from the cheap per-source geometry init_data() already resolved (sources/
+        # positions/_msim_transforms/_msim_output_order/_msim_z_scale) - real msim construction
+        # (the expensive part) is deferred until something genuinely needs pixel-shaped data
+        # (preview fusion, pre-processing/registration/fusion), not eagerly for every project load
+        return self.ensure_msims()
+
+    @msims.setter
+    def msims(self, value):
+        self._msims = value
+
+    def ensure_msims(self, progress_factory=None):
+        # same lazy build the msims property triggers, but callable ahead of time with a
+        # progress_factory - lets a caller that's about to force this (e.g. run_pre_processing())
+        # show fine-grained, per-source progress for it instead of it happening silently as a
+        # side effect of evaluating `self.msims` as a plain argument expression
+        if self._msims is None:
+            self._build_msims(progress_factory=progress_factory)
+        return self._msims
+
+    def _build_msims(self, progress_factory=None):
+        progress_context = (
+            progress_factory(total=len(self.sources), desc='Building sources')
+            if progress_factory is not None
+            else nullcontext(None)
+        )
+        with progress_context as pbar:
+            msims = []
+            for source, translation, transform in zip(self.sources, self.positions, self._msim_transforms):
+                msims.append(build_source_msim(source, self._msim_output_order, translation, transform,
+                                               self.source_transform_key, z_scale=self._msim_z_scale))
+                if pbar is not None:
+                    pbar.update(1)
+        self._msims = msims
 
     def reset(self):
         self.state = RegState.UNINIT
@@ -210,7 +247,8 @@ class MVSRegistration:
             return False
 
         with Timer('init sims', self.logging_time):
-            msims = self.init_data()
+            self.init_data()
+            msims = self.msims
 
         is_3d = (self.sources[0].get_size().get('z', 0) > 1)
         is_stack = ('stack' in operation)
@@ -356,46 +394,70 @@ class MVSRegistration:
     def init_sources(self, progress_factory=None):
         source_metadata0 = self.source_metadata
         source_metadata = {}
-        self.sources = []
-        matrix_size = None
+        nfiles = len(self.filenames)
+        self.sources = [None] * nfiles
         progress_context = (
-            progress_factory(total=len(self.filenames), desc='Initialising sources')
+            progress_factory(total=nfiles, desc='Initialising sources')
             if progress_factory is not None
             else nullcontext(None)
         )
+        # resolve each file's own source_metadata up front (cheap, in-memory) - `source_metadata`
+        # is reused/mutated across iterations below (matching the previous sequential behaviour),
+        # so each file gets its own snapshot rather than a shared dict that the source
+        # construction below (parallelised, so no longer necessarily reading it immediately) could
+        # see mutated to a later file's values
+        per_file_metadata = []
+        for index, label in enumerate(self.file_labels):
+            if isinstance(source_metadata0, dict) and label in source_metadata0:
+                source_metadata = source_metadata0[label]
+                position, rotation, scale = get_properties_from_transform(param_utils.affine_to_xaffine(np.array(source_metadata)))
+                source_metadata = {'position': position, 'rotation': rotation, 'scale': xyz_to_dict([scale, scale])}
+            else:
+                if 'position' in source_metadata0:
+                    translation = source_metadata0['position']
+                    if isinstance(translation, list):
+                        translation = translation[index]
+                    source_metadata['position'] = translation
+                if 'scale' in source_metadata0:
+                    scale = source_metadata0['scale']
+                    if isinstance(scale, list):
+                        scale = scale[index]
+                    source_metadata['scale'] = scale
+                if 'rotation' in source_metadata0:
+                    source_metadata['rotation'] = source_metadata0['rotation']
+            if isinstance(source_metadata0, dict):
+                # blanket per-run flags that apply identically to every source
+                for flag in ('sbem', 'invert', 'is_center'):
+                    if flag in source_metadata0:
+                        source_metadata[flag] = source_metadata0[flag]
+            per_file_metadata.append(copy.deepcopy(source_metadata))
+
         with progress_context as pbar:
-            for index, (filename, label) in enumerate(zip(self.filenames, self.file_labels)):
-                if isinstance(source_metadata0, dict) and label in source_metadata0:
-                    source_metadata = source_metadata0[label]
-                    position, rotation, scale = get_properties_from_transform(param_utils.affine_to_xaffine(np.array(source_metadata)))
-                    source_metadata = {'position': position, 'rotation': rotation, 'scale': xyz_to_dict([scale, scale])}
-                else:
-                    if 'position' in source_metadata0:
-                        translation = source_metadata0['position']
-                        if isinstance(translation, list):
-                            translation = translation[index]
-                        source_metadata['position'] = translation
-                    if 'scale' in source_metadata0:
-                        scale = source_metadata0['scale']
-                        if isinstance(scale, list):
-                            scale = scale[index]
-                        source_metadata['scale'] = scale
-                    if 'rotation' in source_metadata0:
-                        source_metadata['rotation'] = source_metadata0['rotation']
-                if isinstance(source_metadata0, dict):
-                    # blanket per-run flags that apply identically to every source
-                    for flag in ('sbem', 'invert', 'is_center'):
-                        if flag in source_metadata0:
-                            source_metadata[flag] = source_metadata0[flag]
-                source = create_image_source(filename, source_metadata, extra_metadata=self.extra_metadata,
-                                             file_label=label, transform_key=self.source_transform_key,
-                                             matrix_size=matrix_size)
-                if matrix_size is None:
-                    # decided once from the first source, matching the previous is_3d-from-source0 behaviour
-                    matrix_size = 4 if source.get_size().get('z', 0) > 1 else 3
-                self.sources.append(source)
-                if pbar is not None:
-                    pbar.update(1)
+            def build_source(index, matrix_size):
+                return create_image_source(
+                    self.filenames[index], per_file_metadata[index], extra_metadata=self.extra_metadata,
+                    file_label=self.file_labels[index], transform_key=self.source_transform_key,
+                    matrix_size=matrix_size)
+
+            # matrix_size is decided once from the first source (matching the previous
+            # is_3d-from-source0 behaviour) - build it on its own first, so every other source
+            # below can be constructed with that already-known matrix_size from the start
+            first_source = build_source(0, matrix_size=None)
+            matrix_size = 4 if first_source.get_size().get('z', 0) > 1 else 3
+            self.sources[0] = first_source
+            if pbar is not None:
+                pbar.update(1)
+
+            if nfiles > 1:
+                max_workers = min(default_source_init_workers, nfiles - 1)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(build_source, index, matrix_size): index
+                              for index in range(1, nfiles)}
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        self.sources[index] = future.result()
+                        if pbar is not None:
+                            pbar.update(1)
 
     def init_data(self, source_metadata={}, extra_metadata={}, z_scale=None, target_scale=None, store=True,
                   progress_factory=None):
@@ -496,7 +558,8 @@ class MVSRegistration:
         z_position = 0
         final_scales = []
         final_translations = []
-        msims = []
+        transforms = []
+        msims = [] if not store else None
         for source, level, rescale, scale, translation, rotation, file_label in zip(
                 sources, levels, rescales, scales, translations, rotations, self.file_labels):
             # transform #dimensions need to match
@@ -527,23 +590,32 @@ class MVSRegistration:
                 if 'y' not in translation:
                     translation['y'] = 0
 
-            # build this source's own multiscale msim directly from its already-correct, cached
-            # msim (ImageSource.get_msim, itself built from fix_metadata/_build_msim/_restamp_msim)
-            # - only the run-level deltas that no single source can know about itself (cross-source
-            # normalisation, z-stacking, extra_metadata) are applied here, via assign_coords, never
-            # by reconstructing from raw arrays with si_utils.get_sim_from_array
-            msim = build_source_msim(source, output_order, translation, transform, self.source_transform_key,
-                                     z_scale=z_scale)
-            msims.append(msim)
+            transforms.append(transform)
+            if not store:
+                # build this source's own multiscale msim directly from its already-correct,
+                # cached msim (ImageSource.get_msim, itself built from fix_metadata/_build_msim/
+                # _restamp_msim) - only the run-level deltas that no single source can know about
+                # itself (cross-source normalisation, z-stacking, extra_metadata) are applied
+                # here, via assign_coords, never by reconstructing from raw arrays with
+                # si_utils.get_sim_from_array
+                msim = build_source_msim(source, output_order, translation, transform, self.source_transform_key,
+                                         z_scale=z_scale)
+                msims.append(msim)
             final_scales.append(scale)
             final_translations.append(translation)
 
         if store:
-            self.msims = msims
             self.scales = final_scales
             self.positions = final_translations
             self.rotations = rotations
             self.state = RegState.SIMS_INIT
+            # defer the actual per-source msim build (build_source_msim(), the expensive part)
+            # until self.msims is genuinely read - see the msims property/_build_msims()
+            self._msim_output_order = output_order
+            self._msim_z_scale = z_scale
+            self._msim_transforms = transforms
+            self._msims = None
+            return None
 
         return msims
 

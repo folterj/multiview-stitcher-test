@@ -33,18 +33,25 @@ class ImageSource:
         self.data = []
         self.metadata = {}
         self.transform = None
-        self.msim = None
+        self._msim = None
         self._redimensioned_msims = {}
         self.init_metadata()
         self.fix_metadata(source_metadata, extra_metadata, matrix_size)
-        if self.msim is None:
-            self._add_missing_pyramid_levels()
-            self._build_msim()
-        else:
+        self._add_missing_pyramid_levels()
+        if self._msim is not None:
             # a subclass (e.g. ZarrImageSource) already built self.msim natively - re-stamp
             # this run's final geometry onto it in place, instead of tearing it down to raw
             # arrays and rebuilding a whole new msim from scratch via _build_msim()
             self._restamp_msim()
+        # else: self.msim is built lazily on first access (see the msim property) - most
+        # sources (e.g. TiffImageSource) never need it during ordinary project load, only
+        # once real pixel-shaped data is actually requested (preview fusion, pre-processing)
+
+    @property
+    def msim(self):
+        if self._msim is None:
+            self._build_msim()
+        return self._msim
 
     def get_msim(self, output_order):
         """self.msim redimensioned to `output_order`, built once and cached per output_order -
@@ -219,7 +226,7 @@ class ImageSource:
                 scale=scale_arg, translation=translation_arg,
                 affine=self.transform, transform_key=self.transform_key,
                 c_coords=c_coords))
-        self.msim = msi_utils.get_msim_from_sims(sims)
+        self._msim = msi_utils.get_msim_from_sims(sims)
 
     def _restamp_msim(self):
         # a subclass (e.g. ZarrImageSource) already built self.msim natively via a trusted
