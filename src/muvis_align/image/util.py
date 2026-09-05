@@ -425,7 +425,7 @@ def get_chunk_sizes(dtype, spatial_dims, xy_chunk_size=1024, target_bytes=64 * 1
     return sizes
 
 
-def get_contrast_limits(msim):
+def get_contrast_limits(msim, cheap=False):
     """Real min/max contrast range computed from just the coarsest pyramid level, so a caller
     can pass it as add_image()'s contrast_limits without napari falling back to its own default:
     for multiscale layers that already reads the coarsest level (data[-1]), but for anything
@@ -433,7 +433,18 @@ def get_contrast_limits(msim):
     means eagerly running that level's whole fusion graph just to pick initial display bounds
     (see napari.layers.utils.layer_utils.calc_data_range). Doing it here instead is no cheaper
     per se, but runs once, up front, on only the coarsest (by far the smallest) level.
+
+    cheap=True skips that compute entirely and returns a naive dtype-range guess instead - for
+    an interactive overview built from hundreds of sources, one dask.compute() per source adds
+    up fast even on just the coarsest level; the user can always auto-contrast a layer from
+    napari's own UI once it's up, so getting this exactly right up front isn't worth the cost
+    there.
     """
+    if cheap:
+        dtype = get_msim_level_data(msim)[-1].dtype
+        if np.issubdtype(dtype, np.integer):
+            return [0, np.iinfo(dtype).max]
+        return [0.0, 1.0]
     coarsest = get_msim_level_data(msim)[-1]
     min_val, max_val = dask.compute(coarsest.min(), coarsest.max())
     min_val, max_val = float(min_val), float(max_val)

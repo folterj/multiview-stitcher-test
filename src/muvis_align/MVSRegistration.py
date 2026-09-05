@@ -1402,12 +1402,30 @@ class MVSRegistration:
         if is_channel_overlay:
             # convert to multichannel images - one channel per source, still a real multiscale
             # pyramid (combine_msims_as_channels stacks 'c' per level, not just at one resolution)
-            channel_results = [fusion.fuse(
-                [msim],
-                transform_key=transform_key,
-                output_stack_properties=output_stack_properties,
-                output_chunksize=output_chunksize
-            ) for msim in msims]
+            def build_channel_result(msim):
+                return fusion.fuse(
+                    [msim],
+                    transform_key=transform_key,
+                    output_stack_properties=output_stack_properties,
+                    output_chunksize=output_chunksize
+                )
+
+            # each fuse() call here only builds one source's own (lazy) dask graph against the
+            # shared output_stack_properties - independent per source, so a thread pool spreads
+            # that graph-construction work (real CPU cost for hundreds of sources) across every
+            # available core instead of paying it out one source at a time. Joined synchronously
+            # (results gathered in submission order below) before returning, same as
+            # init_sources() - no async/background-worker handling needed on the caller's side.
+            channel_results = [None] * len(msims)
+            if len(msims) > 1:
+                max_workers = min(default_preview_workers, len(msims))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(build_channel_result, msim): index
+                              for index, msim in enumerate(msims)}
+                    for future in as_completed(futures):
+                        channel_results[futures[future]] = future.result()
+            elif msims:
+                channel_results[0] = build_channel_result(msims[0])
             fused_image = combine_msims_as_channels(channel_results, [channel['label'] for channel in channels])
         else:
             if fusion_method:

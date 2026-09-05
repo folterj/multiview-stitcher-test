@@ -961,7 +961,7 @@ def test_update_views_adds_enabled_preview_layers(
         show_preprocessed=True,
     )
     bare_interface._napari_view_add_fused_data.assert_called_once_with(
-        bare_interface.viewer, image_data, "sample data"
+        bare_interface.viewer, image_data, "sample data", cheap=True
     )
     expected_shape_call = (
         shapes, ["0"], ["image-0"], [(1, 1, 1)], "sample shapes"

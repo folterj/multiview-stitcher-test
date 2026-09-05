@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from enum import Enum, auto
 from magicclass.ext.napari import ViewerWidget
@@ -13,7 +14,7 @@ from qtpy.QtGui import QColor
 from qtpy.QtWidgets import QMessageBox
 
 from muvis_align.constants import zarr_extension, default_transform_key, default_quality_key, \
-    default_interactive_preview_scale
+    default_interactive_preview_scale, default_preview_workers
 from muvis_align.file.project_yaml import read_params, get_template_params, write_params, update_params
 from muvis_align.MVSRegistration import MVSRegistration, RegState
 from muvis_align.image.util import get_sim_physical_size, get_sim_position_final, \
@@ -529,7 +530,11 @@ class Interface:
                 data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
             if data is not None:
                 with Timer('update_views: add fused data to viewer', verbose=self._timing_verbose()):
-                    self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
+                    # cheap=True: this is the general overview, not the accurate fusion-tab
+                    # preview (preview_fusion()) or the real exported result (fusion_process())
+                    # - a naive contrast guess is fine here, see _napari_view_add_fused_data()
+                    self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data',
+                                                     cheap=True)
         with Timer('update_views: add shapes to viewer', verbose=self._timing_verbose()):
             self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
 
@@ -771,7 +776,7 @@ class Interface:
             #             self.on_selection_change(refs[self.selected_shape_index])
             #     yield
 
-    def _napari_view_add_fused_data(self, viewer, fused, layer_name):
+    def _napari_view_add_fused_data(self, viewer, fused, layer_name, cheap=False):
         # MVSRegistration.fuse() always returns msims, never sims - get_msim_level_data (each
         # level's raw dask array straight off its own Dataset) is always enough to show the
         # result in napari as a genuine multiscale pyramid, so nothing here needs a sim built
@@ -779,28 +784,49 @@ class Interface:
         # already channel-combined by fuse()'s own combine_msims_as_channels when there's more
         # than one channel, so a 'c' dim just needs channel_axis) or, in 'compose' mode (no
         # actual fusion), a plain list of per-source msims shown as separate layers.
+        #
+        # cheap=True (used by update_views()'s general overview, not preview_fusion()'s real
+        # fusion-tab preview) skips get_contrast_limits()'s per-source dask.compute() in favour
+        # of a naive dtype-range guess - correctness there doesn't matter for a first-look
+        # overview, and it's the one per-source cost below that's neither Qt-only nor already
+        # cheap metadata, so removing it (rather than threading it) is the actual win.
         channels = self.extra_metadata.get('channels', [])
 
         if isinstance(fused, list):
-            # 'compose' mode: no real fusion, one separate napari layer per source - for
-            # hundreds of sources this means hundreds of individual add_image() calls, each
-            # running synchronously on the GUI thread (contrast/thumbnail setup included), with
-            # nothing yielding back to Qt in between - a likely source of both the long,
-            # unresponsive wait and the many per-layer copies driving memory up
-            add_image_timer = Timer(f'_napari_view_add_fused_data: add_image loop ({len(fused)} layers)',
-                                    verbose=self._timing_verbose())
-            add_image_timer.start()
-            for msim, channel in zip(fused, channels or [{}] * len(fused)):
+            # 'compose' mode: no real fusion, one separate napari layer per source. add_image()
+            # itself must stay on the GUI thread (napari/Qt layers aren't thread-safe) - the part
+            # a thread pool can still take off that thread is gathering each source's own
+            # metadata/contrast-limits first, across every available core, joined synchronously
+            # (results collected in original order) before the add_image() calls run serially.
+            def prep_layer(msim, channel):
                 image0 = get_msim_image0(msim)
                 scale = si_utils.get_spacing_from_sim(image0, asarray=True)
                 translate = si_utils.get_origin_from_sim(image0, asarray=True)
-                contrast_limits = get_contrast_limits(msim)
-                viewer.add_image(get_msim_level_data(msim), name=channel.get('label', layer_name),
-                                 multiscale=True, colormap=channel.get('color', (1, 1, 1, 1)),
-                                 contrast_limits=contrast_limits,
-                                 scale=scale, translate=translate, blending='additive')
-                add_image_timer.record()
-            add_image_timer.get_total_time()
+                contrast_limits = get_contrast_limits(msim, cheap=cheap)
+                return dict(data=get_msim_level_data(msim), name=channel.get('label', layer_name),
+                           multiscale=True, colormap=channel.get('color', (1, 1, 1, 1)),
+                           contrast_limits=contrast_limits,
+                           scale=scale, translate=translate, blending='additive')
+
+            channel_list = channels or [{}] * len(fused)
+            with Timer(f'_napari_view_add_fused_data: prep {len(fused)} layers',
+                      verbose=self._timing_verbose()):
+                layer_kwargs = [None] * len(fused)
+                if len(fused) > 1:
+                    max_workers = min(default_preview_workers, len(fused))
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = {executor.submit(prep_layer, msim, channel): index
+                                  for index, (msim, channel) in enumerate(zip(fused, channel_list))}
+                        for future in as_completed(futures):
+                            layer_kwargs[futures[future]] = future.result()
+                elif fused:
+                    layer_kwargs[0] = prep_layer(fused[0], channel_list[0])
+
+            with Timer(f'_napari_view_add_fused_data: add_image loop ({len(fused)} layers)',
+                      verbose=self._timing_verbose()):
+                for kwargs in layer_kwargs:
+                    data = kwargs.pop('data')
+                    viewer.add_image(data, **kwargs)
             return
 
         image0 = get_msim_image0(fused)
@@ -808,7 +834,7 @@ class Interface:
         translate = si_utils.get_origin_from_sim(image0, asarray=True)
         data = get_msim_level_data(fused)
         with Timer('_napari_view_add_fused_data: get_contrast_limits', verbose=self._timing_verbose()):
-            contrast_limits = get_contrast_limits(fused)
+            contrast_limits = get_contrast_limits(fused, cheap=cheap)
         if len(channels) > 1 and 'c' in image0.dims:
             channel_axis = image0.dims.index('c')
             name = [channel.get('label', index) for index, channel in enumerate(channels)]
