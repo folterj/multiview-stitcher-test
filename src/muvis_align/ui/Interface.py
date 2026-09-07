@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from enum import Enum, auto
 from magicclass.ext.napari import ViewerWidget
-from multiview_stitcher import spatial_image_utils as si_utils, param_utils
+from multiview_stitcher import msi_utils, spatial_image_utils as si_utils, param_utils
 from napari.utils import progress
 from napari.utils.notifications import show_warning
 import networkx as nx
@@ -35,7 +35,7 @@ from muvis_align.ui._utils import TemporarilyDisabledWidgets, VisibleActivityDoc
 from muvis_align.ui.bilayers_util import get_section_dict
 from muvis_align.util import print_dict_simple, set_dict_value, is_valid_value, \
     calculate_rigid_difference, operation_to_past_participle, eval_path, \
-    resolve_to_project_dir, relativize_to_project_dir
+    resolve_to_project_dir, relativize_to_project_dir, get_filetitle
 
 
 class ViewMode(Enum):
@@ -1222,7 +1222,7 @@ class Interface:
     @catch_run_errors
     def run_convert(self):
         operation = self.params['registration']['operation']
-        output_filename = operation_to_past_participle(operation)
+        output_folder = operation_to_past_participle(operation)
         tile_size = self.params['fusion']['tile_size']
         if ',' in tile_size:
             tile_size = [int(size.strip()) for size in tile_size.split(',')]
@@ -1233,27 +1233,27 @@ class Interface:
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
              VisibleActivityDock(self.viewer):
             # see run_pre_processing() - builds msims with its own progress reporting instead of
-            # silently as a side effect of the fuse() call below
+            # silently as a side effect of the save loop below
             msims = self.reg.ensure_msims(progress_factory=progress_factory)
 
         with NapariDaskProgress(progress_class=progress, desc='Convert'), \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
              VisibleActivityDock(self.viewer), \
              Timer('convert', verbose=self._timing_verbose()):
-            # fusion_method='compose': each source kept separate, at its own source/metadata
-            # position - no blending - fuse() is only used here for its shared
-            # is_channel_overlay/z-stacking handling, not for any real fusion
-            fused_image, is_saved = self.reg.fuse(msims,
-                                                  fusion_method='compose',
-                                                  transform_key=self.reg.source_transform_key,
-                                                  dimension=self.params['input_output']['registration_dimension'],
-                                                  extra_metadata=self.extra_metadata)
-            if not is_saved:
-                save_sims = extract_sims_from_fused(fused_image)
-                self.reg.save(output_filename, save_sims,
+            # MVSRegistration.fuse() isn't used here - even its 'compose' fusion_method still
+            # builds one shared output_stack_properties canvas across every source first (wasted
+            # work no per-source file needs), and is_channel_overlay would still combine sources
+            # into a single multichannel image regardless of fusion_method whenever multiple
+            # channels are configured. Each source is instead written out individually - one
+            # file per input, named after it, into its own output subfolder - never fused.
+            channels = self.extra_metadata.get('channels', [])
+            for filename, position, msim in zip(self.reg.filenames, self.reg.positions, msims):
+                sim = msi_utils.get_sim_from_msim(msim, scale='scale0')
+                output_filename = f'{output_folder}/{get_filetitle(filename)}'
+                self.reg.save(output_filename, sim,
                               transform_key=self.reg.source_transform_key,
-                              translations0=self.reg.positions,
-                              channels=self.extra_metadata.get('channels', []),
+                              translations0=[position],
+                              channels=channels,
                               tile_size=tile_size,
                               ome_version=self.params['fusion']['ome_version'])
         return True
