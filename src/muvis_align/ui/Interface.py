@@ -1243,22 +1243,15 @@ class Interface:
             # channels are configured. Each source is instead written out individually - one
             # file per input, named after it, into its own output subfolder, keeping its own
             # native pyramid levels exactly as-is (save_native_levels()) - never fused/resampled.
-            def convert_one(filename, msim):
+            #
+            # Sequential, not a thread pool: to_ngff_zarr()/zarr's own async store internals
+            # aren't safe to invoke concurrently from multiple threads each running their own
+            # event loop (observed as a Windows PermissionError racing on a store's zarr.json
+            # rename) - each write already parallelises its own array computation across every
+            # core via dask's default threaded scheduler, which is enough on its own.
+            for filename, msim in zip(self.reg.filenames, msims):
                 output_filename = f'{output_folder}/{get_filetitle(filename)}'
                 self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
-
-            # each source writes to its own independent output file - safe (and, for hundreds of
-            # sources, much faster) to run across a thread pool rather than one at a time, same
-            # as init_sources()/fuse()'s own channel-overlay path
-            if len(msims) > 1:
-                max_workers = min(default_preview_workers, len(msims))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = [executor.submit(convert_one, filename, msim)
-                              for filename, msim in zip(self.reg.filenames, msims)]
-                    for future in as_completed(futures):
-                        future.result()
-            elif msims:
-                convert_one(self.reg.filenames[0], msims[0])
         return True
 
     @catch_run_errors
