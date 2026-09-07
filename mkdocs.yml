@@ -1,6 +1,6 @@
 site_name: muvis-align
 site_url: https://ccp-volume-em.github.io/muvis-align/
-site_description: convert source image to OME-TIFF or OME-Zarr format
+site_description: Image registration pipeline using multiview-stitcher and napari plugin
 
 repo_name: muvis-align
 repo_url: https://github.com/ccp-volume-em/muvis-align

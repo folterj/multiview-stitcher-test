@@ -125,11 +125,10 @@ ENTRYPOINT []
 # Run:
 # docker run -v "D:\slides:/data" -p 9876:9876 muvis-align-xpra
 
-# Push (tag "latest" too, for xpra-pull.sh):
+# Build & push (tagged with the current GitHub release version, and "latest",
+# for xpra-pull.sh) - see docker-build-push.sh:
 # docker login quay.io
-# docker tag muvis-align-xpra quay.io/ccp-volume-em/muvis-align-xpra:v1.0.0
-# docker tag muvis-align-xpra quay.io/ccp-volume-em/muvis-align-xpra:latest
-# docker push --all-tags quay.io/ccp-volume-em/muvis-align-xpra
+# ./docker-build-push.sh
 
 # apptainer remote login --username [username] docker://quay.io
 # apptainer pull docker://quay.io/ccp-volume-em/muvis-align-xpra:v1.0.0
