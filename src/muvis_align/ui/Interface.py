@@ -14,7 +14,7 @@ from qtpy.QtGui import QColor
 from qtpy.QtWidgets import QMessageBox
 
 from muvis_align.constants import zarr_extension, default_transform_key, default_quality_key, \
-    default_interactive_preview_scale, default_preview_workers, default_max_auto_preview_sources
+    default_interactive_preview_scale, default_preview_workers
 from muvis_align.file.project_yaml import read_params, get_template_params, write_params, update_params
 from muvis_align.MVSRegistration import MVSRegistration, RegState
 from muvis_align.image.util import get_sim_physical_size, get_sim_position_final, \
@@ -528,18 +528,6 @@ class Interface:
         # fused image preview always needs every source's real msim built (see
         # _create_napari_data()), so showing it only once pre-processing/registration has
         # actually happened is also what keeps that cost from ever blocking initial project load
-        n_sources = len(self.reg.sources)
-        if show_images and n_sources > default_max_auto_preview_sources:
-            # multiview_stitcher's fuse() takes a "per-chunk delayed" graph-construction path
-            # (rather than a thin map_blocks graph) once inputs have been through any of our own
-            # preprocessing/copying, as they always have here - one Python-level delayed task per
-            # (output chunk x overlapping source). At thousands of sources that graph alone can
-            # reach millions of nodes before any pixel is computed - observed in practice driving
-            # memory to ~500GB and killing the process. Not worth attempting automatically; the
-            # Fusion tab's own preview/export remain available as an explicit, opted-into action.
-            logging.info(f'Skipping automatic fused-data preview: {n_sources} sources exceeds '
-                        f'{default_max_auto_preview_sources} - showing shapes only')
-            show_images = False
         if show_images:
             with Timer('update_views: create fused data', verbose=self._timing_verbose()):
                 data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
