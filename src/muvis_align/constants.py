@@ -1,5 +1,7 @@
 import os
 
+import zarr
+
 zarr_extension = '.ome.zarr'
 tiff_extension = '.ome.tiff'
 
@@ -22,6 +24,15 @@ except AttributeError:
 # scales with it up to a fixed ceiling, so a genuinely small/constrained machine (few cores,
 # likely also a modest network link) doesn't default to the same 64 threads a big one would.
 default_source_init_workers = min(64, _available_cpus * 8)
+# zarr v3 routes all of its own I/O through one shared, process-wide asyncio event loop plus a
+# single internal ThreadPoolExecutor (zarr.core.sync._get_executor()), sized by this config value
+# (default None -> Python's own min(32, cpu_count()+4)) - completely independent of
+# default_source_init_workers above. Without raising it, ZarrImageSource reads stay bottlenecked
+# on zarr's own smaller/default-sized pool no matter how many of our own worker threads are
+# waiting to submit a read, which is why OME-Zarr sources parallelize noticeably worse than
+# OME-TIFF ones (tifffile's own reads don't go through this at all). Set once, globally, here
+# (not inside a `with` block) so it applies for the life of the process.
+zarr.config.set({'threading.max_workers': default_source_init_workers})
 # per-source preview/fusion prep (building each source's own fuse graph, gathering contrast
 # limits/metadata) is genuine CPU-bound work, not I/O wait - unlike default_source_init_workers
 # above there's no file-handle concern capping it, so this uses every allocated core
