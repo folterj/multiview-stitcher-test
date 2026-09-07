@@ -7,7 +7,7 @@ import zarr
 from muvis_align.image.color_conversion import rgba_to_hexrgb
 from muvis_align.util import create_chunk_dict
 from muvis_align.constants import default_ome_zarr_version, default_chunk_size
-from muvis_align.image.util import create_compression_filter, build_missing_pyramid_levels
+from muvis_align.image.util import create_compression_filter
 from muvis_align.image.ome_zarr_util import get_channel_window
 
 
@@ -74,13 +74,20 @@ def save_ome_image(data, path, dim_order, pixel_size, channels, translation, rot
 
 
 def save_ome_multiscale_levels(path, levels, dim_order, channels, translation,
-                               pyramid_downsample=2, min_size=default_chunk_size,
-                               compression=None, ome_version=default_ome_zarr_version):
+                               min_length=128, compression=None, ome_version=default_ome_zarr_version):
     """Write pre-built pyramid levels (e.g. a source's own native resolutions) exactly as
     given - no resampling - unlike save_ome_image()/to_multiscales(), which always derives
-    every level but the first from one input via resampling. Only pads with additional coarser
-    levels, resampled from the smallest given level, if fewer than build_missing_pyramid_levels()'s
-    own stopping criterion (shrunk to at most min_size) would otherwise leave.
+    every level but the first from one input via resampling.
+
+    Pads with additional coarser levels beyond the smallest given one only if ngff_zarr's own
+    optimal-level-count logic says there's room for more: to_multiscales(scale_factors=<int>)
+    (an int, rather than an explicit per-level list) delegates to its private
+    _ngff_image_scale_factors(), which keeps halving while there's still at least min_length
+    pixels' worth of data left *and* every spatial dim still exceeds twice the chunk size -
+    the same chunk-size/pixel-count-based stopping criterion save_ome_image() already relies on
+    for a regular (fully resampled) export, reused here rather than a bespoke one. Those extra
+    levels are genuinely resampled (via ngff_zarr's own default downsampling method) since
+    nothing at that resolution exists in the source to preserve.
 
     levels: list of (data, pixel_size) pairs, finest first - data can be numpy or dask.
     """
@@ -91,33 +98,33 @@ def save_ome_multiscale_levels(path, levels, dim_order, channels, translation,
     if compression_filters is not None:
         storage_options['filters'] = compression_filters
 
-    datas = [data for data, _ in levels]
-    pixel_sizes = [pixel_size for _, pixel_size in levels]
-    # build_missing_pyramid_levels() already implements "keep halving until <= min_size" -
-    # reused here from the smallest level already given, so it adds nothing when that's
-    # already small enough on its own
-    extra_datas, extra_pixel_sizes = build_missing_pyramid_levels(
-        datas[-1], dim_order, pixel_sizes[-1], pyramid_downsample=pyramid_downsample, min_size=min_size)
-    datas += extra_datas[1:]
-    pixel_sizes += extra_pixel_sizes[1:]
-
     axes_units = {dim: 'micrometer' for dim in dim_order if dim in 'xyz'}
     chunks = create_chunk_dict(default_chunk_size, dim_order)
     images = []
     datasets = []
     coordinate_systems = None
-    for index, (data, pixel_size) in enumerate(zip(datas, pixel_sizes)):
+    for data, pixel_size in levels:
         # to_multiscales(scale_factors=[]) just wraps one already-built level with correct OME
         # metadata (axes/coordinateSystems/scale/translation) - no resampling happens for it
         ngff_image = to_ngff_image(data, dims=dim_order, scale=pixel_size, translation=translation,
                                    axes_units=axes_units)
         level_multiscales = to_multiscales(ngff_image, scale_factors=[], chunks=chunks)
         images.append(level_multiscales.images[0])
-        dataset = level_multiscales.metadata.datasets[0]
-        dataset.path = f'scale{index}/image'
-        datasets.append(dataset)
+        datasets.append(level_multiscales.metadata.datasets[0])
         if coordinate_systems is None:
             coordinate_systems = level_multiscales.metadata.coordinateSystems
+
+    smallest_data, smallest_pixel_size = levels[-1]
+    smallest_ngff_image = to_ngff_image(smallest_data, dims=dim_order, scale=smallest_pixel_size,
+                                        translation=translation, axes_units=axes_units)
+    extra_multiscales = to_multiscales(smallest_ngff_image, scale_factors=min_length, chunks=chunks)
+    images += extra_multiscales.images[1:]
+    datasets += extra_multiscales.metadata.datasets[1:]
+
+    # renumber every dataset path sequentially - each was independently built starting from
+    # 'scale0/image', so native and padding levels alike would otherwise collide/repeat
+    for index, dataset in enumerate(datasets):
+        dataset.path = f'scale{index}/image'
 
     metadata = Metadata(coordinateSystems=coordinate_systems, datasets=datasets)
     if channels:

@@ -1558,7 +1558,7 @@ class MVSRegistration:
                    ome_version=ome_version,
                    verbose=self.verbose)
 
-    def save_native_levels(self, output_filename, msim, channels=None, pyramid_downsample=2,
+    def save_native_levels(self, output_filename, msim, channels=None, min_length=128,
                            compression=None, ome_version=default_ome_zarr_version):
         """Write msim's own native pyramid levels exactly as-is (no resampling) - see
         save_ome_multiscale_levels(). Used by convert, which never fuses/resamples a source."""
@@ -1574,7 +1574,7 @@ class MVSRegistration:
         translation = si_utils.get_origin_from_sim(images[0])
 
         save_ome_multiscale_levels(str(output_filename) + zarr_extension, levels, dim_order, channels,
-                                   translation, pyramid_downsample=pyramid_downsample,
+                                   translation, min_length=min_length,
                                    compression=compression, ome_version=ome_version)
 
     def save_video(self, output, msims, fused_msim):
