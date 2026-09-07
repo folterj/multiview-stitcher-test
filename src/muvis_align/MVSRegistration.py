@@ -92,14 +92,23 @@ class MVSRegistration:
             if progress_factory is not None
             else nullcontext(None)
         )
+        source_times = []
+        phase_start = time.time()
         with progress_context as pbar:
             msims = []
             for source, translation, transform in zip(self.sources, self.positions, self._msim_transforms):
+                source_start = time.time()
                 msims.append(build_source_msim(source, self._msim_output_order, translation, transform,
                                                self.source_transform_key, z_scale=self._msim_z_scale))
+                source_times.append(time.time() - source_start)
                 if pbar is not None:
                     pbar.update(1)
         self._msims = msims
+        if self.logging_time and source_times:
+            # sequential (unlike init_sources()'s threaded file reads) - wall time is just the
+            # sum below, but mean/max still show per-source cost and outliers
+            logging.info(f'Build msims: {len(source_times)} sources, wall {time.time() - phase_start:.1f}s '
+                        f'(mean {1000 * sum(source_times) / len(source_times):.0f}ms, max {1000 * max(source_times):.0f}ms)')
 
     def reset(self):
         self.state = RegState.UNINIT

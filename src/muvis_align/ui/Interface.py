@@ -394,15 +394,18 @@ class Interface:
                                       bar_format=" ",
                                       min_duration=0.1) as progress_factory, \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer):
+             VisibleActivityDock(self.viewer), \
+             Timer('pre_processing_process', verbose=self._timing_verbose()):
             # self.reg.msims is built lazily (see MVSRegistration.msims) - building it here
             # explicitly, through ensure_msims(), gives that per-source construction its own
             # progress reporting instead of it happening silently (no progress feedback) as a
             # side effect of evaluating `self.reg.msims` as a plain argument below
-            msims = self.reg.ensure_msims(progress_factory=progress_factory)
-            _, _, modified = self.reg.preprocess(msims,
-                                                 progress_factory=progress_factory,
-                                                 **params_features)
+            with Timer('run_pre_processing: build msims (load image data)', verbose=self._timing_verbose()):
+                msims = self.reg.ensure_msims(progress_factory=progress_factory)
+            with Timer('run_pre_processing: preprocess', verbose=self._timing_verbose()):
+                _, _, modified = self.reg.preprocess(msims,
+                                                     progress_factory=progress_factory,
+                                                     **params_features)
         self.pre_processing_performed = modified
         return True
 
