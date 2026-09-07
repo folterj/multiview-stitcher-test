@@ -31,6 +31,15 @@ default_preview_workers = _available_cpus
 # on-screen preview stays proportionate to an exported one rather than fusing at native/scale0
 # resolution regardless of how large or how many sources there are
 default_interactive_preview_scale = 16
+# update_views()'s automatic fused-data preview (real blending, not the cheap 'compose' path) -
+# above this many sources, skip building it automatically and show shapes only. multiview_stitcher's
+# own fuse() takes a "per-chunk delayed" graph-construction path (its docs: "All-zarr inputs use
+# map_blocks (thin graph); dask inputs use per-chunk delayed") once inputs have been through any of
+# our own preprocessing/copying, as they always have here - one Python-level delayed task per
+# (output chunk x overlapping source), which for thousands of sources across a large volume can
+# reach millions of graph nodes well before any pixel is actually computed. Observed in practice:
+# 4733 sources fusing into a 72x6800x6800 canvas drove memory to ~500GB and killed the process.
+default_max_auto_preview_sources = 500
 
 prereg_mappings_name = 'prereg_mappings.csv'
 default_pair_mappings_name = 'pair_mappings.json'
