@@ -1,4 +1,5 @@
 import logging
+import time
 
 import cv2 as cv
 import dask
@@ -1638,7 +1639,17 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
     good_pairs = []
     is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(sim).get('z', 0) for sim in sims])) > 1)
     if pairs is None:
+        broad_phase_start = time.time()
         pairs = _filter_candidate_overlap_pairs(sims, transform_key)
+        # each pair below runs _get_overlap_bboxes' exact intersection test - a scipy.optimize.
+        # linprog solve, typically low-single-digit milliseconds even for a trivial problem, so
+        # this count matters a lot more to total time than sims count alone: thousands of
+        # candidate pairs surviving the (cheap, vectorized) broad phase above can still add up
+        # to tens of seconds once each hits the solver
+        logging.info(f'create_overlap_shapes: {len(pairs)} candidate pairs from {len(sims)} sims'
+                     f' (broad phase: {time.time() - broad_phase_start:.1f}s)')
+    n_exact_tests = 0
+    exact_test_time = 0.0
     for pair in pairs:
         sim1 = squeeze_sim_transform_time(sims[pair[0]], transform_key)
         sim2 = squeeze_sim_transform_time(sims[pair[1]], transform_key)
@@ -1674,8 +1685,13 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
                 sim1, sim2 = projected_sims
 
         if process_pair:
+            n_exact_tests += 1
+            exact_test_start = time.time()
             try:
-                # catch in case there is no overlap
+                # catch in case there is no overlap - _get_overlap_bboxes runs an exact
+                # (scipy.optimize.linprog-based) intersection test per pair, a solver call that
+                # costs low-single-digit milliseconds even for a trivial problem - the dominant
+                # cost here once thousands of pairs reach it, see the logging below
                 result = _get_overlap_bboxes(
                     sim1,
                     sim2,
@@ -1696,6 +1712,12 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
                 pass
             except ValueError as e:
                 logging.exception(f'Error processing pair {pair}: {e}')
+            finally:
+                exact_test_time += time.time() - exact_test_start
+    if n_exact_tests:
+        logging.info(f'create_overlap_shapes: {n_exact_tests} exact intersection tests'
+                     f' (of {len(pairs)} candidate pairs), {exact_test_time:.1f}s total'
+                     f' ({1000 * exact_test_time / n_exact_tests:.1f}ms per test)')
     return shapes, good_pairs
 
 
