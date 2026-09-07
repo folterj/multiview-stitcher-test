@@ -282,26 +282,26 @@ class Interface:
             self.run_pre_processing()
             self.reg.pair_msims = self.reg.register_msims
         if self.reg.is_fused():
-            self.enable_tabs(True, 4)
-            self.select_tab(4)
             copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
             self.preview_fusion()
-        elif self.reg.is_global_registered():
             self.enable_tabs(True, 4)
             self.select_tab(4)
+        elif self.reg.is_global_registered():
             copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
             self.update_registered(view_transform_key=self.reg.reg_transform_key)
+            self.enable_tabs(True, 4)
+            self.select_tab(4)
         elif self.reg.is_pairs_registered():
+            self.update_registered(view_transform_key=self.reg.source_transform_key)
             self.enable_tabs(True, 3)
             self.select_tab(3)
-            self.update_registered(view_transform_key=self.reg.source_transform_key)
         else:
             # No prior registration to view with a specific transform - this is the one
             # draw update_metadata_source()'s own (skipped, see input_output_process())
             # would otherwise have done for a brand-new project. No pre-processing has run
             # yet, so only shapes are shown - see update_views()'s show_images param.
-            self.enable_tabs(True, 2)
             self.update_views(show_images=False)
+            self.enable_tabs(True, 2)
 
     def update_metadata_source(self, skip_view_update=False):
         if not self.reg.is_pairs_registered():
@@ -409,10 +409,10 @@ class Interface:
     def pre_processing_process(self):
         if not self.run_pre_processing():
             return
+        self.update_views(show_preprocessed=True)
         self.enable_tabs(True, 3)
         self.enable_modify_pair_registration(False)
         self.select_tab(3)
-        self.update_views(show_preprocessed=True)
 
     def populate_channels(self):
         channel_labels = list({channel.get('label', '') for source in self.reg.sources for channel in source.get_channels()})
@@ -1200,8 +1200,8 @@ class Interface:
                 if not self.run_global_registration():
                     return
             copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
-            self.enable_tabs(True, 4)
             self.update_registered(view_transform_key=self.reg.reg_transform_key)
+            self.enable_tabs(True, 4)
             QMessageBox.information(None, 'muvis-align', completion_message)
 
     @catch_run_errors
