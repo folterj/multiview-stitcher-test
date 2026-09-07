@@ -1,3 +1,4 @@
+import itertools
 import logging
 import time
 
@@ -1611,6 +1612,11 @@ def _filter_candidate_overlap_pairs(sims, transform_key):
     on the vast majority of pairs that don't overlap at all, dominating redraw time once there
     are more than a few dozen sources. An AABB always contains the real (possibly rotated) box,
     so filtering on it can never drop a pair that genuinely overlaps.
+
+    Also returns the per-sim mins/maxs themselves (not just which pairs survive) - the caller
+    reuses them to draw an approximate overlap shape directly from each surviving pair's own
+    AABB intersection, skipping the linprog solve entirely for this (pre-registration, no
+    rotation yet) case.
     """
     mins = np.empty((len(sims), 3))
     maxs = np.empty((len(sims), 3))
@@ -1629,7 +1635,8 @@ def _filter_candidate_overlap_pairs(sims, transform_key):
         & np.all(mins[None, :, :] <= maxs[:, None, :], axis=-1)
     )
     iu = np.triu_indices(len(sims), 1)
-    return np.transpose(iu)[overlaps[iu]]
+    pairs = np.transpose(iu)[overlaps[iu]]
+    return pairs, mins, maxs
 
 
 def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
@@ -1638,18 +1645,25 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
     shapes = []
     good_pairs = []
     is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(sim).get('z', 0) for sim in sims])) > 1)
+    # aabbs is only set for the broad-phase-discovered case below (no pair_registration graph
+    # yet to restrict candidates to, e.g. initial project load) - there, sources still sit at
+    # their raw source_metadata transform (no rotation applied yet), so each surviving pair's
+    # own AABB intersection (mins/maxs, already computed by the broad phase) is exact, not just
+    # a bound. Using it directly instead of _get_overlap_bboxes' exact (linprog-based)
+    # intersection test skips that solver call - low-single-digit milliseconds even for a
+    # trivial problem, and the dominant cost once there are thousands of candidate pairs -
+    # entirely for this path. Once real pairs are given (post-registration, a much smaller,
+    # already-curated set, and rotation may genuinely be present) the exact test is still used.
+    aabbs = None
     if pairs is None:
         broad_phase_start = time.time()
-        pairs = _filter_candidate_overlap_pairs(sims, transform_key)
-        # each pair below runs _get_overlap_bboxes' exact intersection test - a scipy.optimize.
-        # linprog solve, typically low-single-digit milliseconds even for a trivial problem, so
-        # this count matters a lot more to total time than sims count alone: thousands of
-        # candidate pairs surviving the (cheap, vectorized) broad phase above can still add up
-        # to tens of seconds once each hits the solver
+        pairs, mins, maxs = _filter_candidate_overlap_pairs(sims, transform_key)
+        aabbs = (mins, maxs)
         logging.info(f'create_overlap_shapes: {len(pairs)} candidate pairs from {len(sims)} sims'
                      f' (broad phase: {time.time() - broad_phase_start:.1f}s)')
     n_exact_tests = 0
     exact_test_time = 0.0
+    n_fast_shapes = 0
     for pair in pairs:
         sim1 = squeeze_sim_transform_time(sims[pair[0]], transform_key)
         sim2 = squeeze_sim_transform_time(sims[pair[1]], transform_key)
@@ -1669,55 +1683,84 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
             z2 = si_utils.get_origin_from_sim(sim2).get('z', 0)
             process_pair = (z1 == z2)
 
-            if process_pair:
-                projected_sims = []
-                for sim in (sim1, sim2):
-                    sim_2d = sim.squeeze('z', drop=True)
-                    sim_2d.attrs = dict(sim.attrs)
-                    sim_2d.attrs['transforms'] = dict(sim.attrs['transforms'])
-                    affine_2d = _adapt_transform_to_image_dims(
-                        sim_2d,
-                        sim_2d.attrs['transforms'][transform_key],
-                        transform_key,
-                    )
-                    si_utils.set_sim_affine(sim_2d, affine_2d, transform_key)
-                    projected_sims.append(sim_2d)
-                sim1, sim2 = projected_sims
+        if not process_pair:
+            continue
 
-        if process_pair:
-            n_exact_tests += 1
-            exact_test_start = time.time()
-            try:
-                # catch in case there is no overlap - _get_overlap_bboxes runs an exact
-                # (scipy.optimize.linprog-based) intersection test per pair, a solver call that
-                # costs low-single-digit milliseconds even for a trivial problem - the dominant
-                # cost here once thousands of pairs reach it, see the logging below
-                result = _get_overlap_bboxes(
-                    sim1,
-                    sim2,
-                    input_transform_key=transform_key,
-                    output_transform_key=transform_key,
+        if aabbs is not None:
+            mins, maxs = aabbs
+            if force_2d:
+                # sim1/sim2 still carry their (size-1) 'z' dim here - mins/maxs column 0 is that
+                # z axis (matching the exact path's own points[:, 1:] below), columns 1/2 the
+                # real spatial extent
+                axes = slice(1, 3)
+            elif 'z' in sim1.dims and 'z' in sim2.dims:
+                axes = slice(0, 3)
+            else:
+                axes = slice(0, 2)
+            lo = np.maximum(mins[pair[0]], mins[pair[1]])[axes]
+            hi = np.minimum(maxs[pair[0]], maxs[pair[1]])[axes]
+            # broad_phase already guarantees lo <= hi in every axis (that's its own overlap
+            # condition) - always a valid, non-empty box, no "no overlap" case to catch here
+            corners = np.array(list(itertools.product(*zip(lo, hi))))
+            shape = _minimal_bb_vertices(corners)
+            n_fast_shapes += 1
+            if is_multi_z_shapes:
+                shape = [[shape_z_position] + list(element) for element in shape]
+            shapes.append(shape)
+            good_pairs.append(pair)
+            continue
+
+        if force_2d:
+            projected_sims = []
+            for sim in (sim1, sim2):
+                sim_2d = sim.squeeze('z', drop=True)
+                sim_2d.attrs = dict(sim.attrs)
+                sim_2d.attrs['transforms'] = dict(sim.attrs['transforms'])
+                affine_2d = _adapt_transform_to_image_dims(
+                    sim_2d,
+                    sim_2d.attrs['transforms'][transform_key],
+                    transform_key,
                 )
-                points = result['intersection'].intersections
-                if points.shape[1] == 3 and force_2d:
-                    # remove constant z coordinate
-                    points = points[:, 1:]
-                shape = _minimal_bb_vertices(points)
-                if is_multi_z_shapes:
-                    shape = [[shape_z_position] + list(element) for element in shape]
-                shapes.append(shape)
-                good_pairs.append(pair)
-            except AttributeError:
-                # ignore NoneType error if there is no overlap
-                pass
-            except ValueError as e:
-                logging.exception(f'Error processing pair {pair}: {e}')
-            finally:
-                exact_test_time += time.time() - exact_test_start
+                si_utils.set_sim_affine(sim_2d, affine_2d, transform_key)
+                projected_sims.append(sim_2d)
+            sim1, sim2 = projected_sims
+
+        n_exact_tests += 1
+        exact_test_start = time.time()
+        try:
+            # catch in case there is no overlap - _get_overlap_bboxes runs an exact
+            # (scipy.optimize.linprog-based) intersection test per pair, a solver call that
+            # costs low-single-digit milliseconds even for a trivial problem - the dominant
+            # cost here once thousands of pairs reach it, see the logging below
+            result = _get_overlap_bboxes(
+                sim1,
+                sim2,
+                input_transform_key=transform_key,
+                output_transform_key=transform_key,
+            )
+            points = result['intersection'].intersections
+            if points.shape[1] == 3 and force_2d:
+                # remove constant z coordinate
+                points = points[:, 1:]
+            shape = _minimal_bb_vertices(points)
+            if is_multi_z_shapes:
+                shape = [[shape_z_position] + list(element) for element in shape]
+            shapes.append(shape)
+            good_pairs.append(pair)
+        except AttributeError:
+            # ignore NoneType error if there is no overlap
+            pass
+        except ValueError as e:
+            logging.exception(f'Error processing pair {pair}: {e}')
+        finally:
+            exact_test_time += time.time() - exact_test_start
     if n_exact_tests:
         logging.info(f'create_overlap_shapes: {n_exact_tests} exact intersection tests'
                      f' (of {len(pairs)} candidate pairs), {exact_test_time:.1f}s total'
                      f' ({1000 * exact_test_time / n_exact_tests:.1f}ms per test)')
+    if n_fast_shapes:
+        logging.info(f'create_overlap_shapes: {n_fast_shapes} shapes from broad-phase AABB '
+                     f'intersection directly (no linprog)')
     return shapes, good_pairs
 
 
