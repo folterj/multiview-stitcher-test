@@ -507,7 +507,7 @@ class MVSRegistration:
         if len(self.filenames) == 0:
             raise ValueError('No input files')
 
-        logging.info('Initialising sims...')
+        logging.info('Initialising sources...')
         if not self.sources or source_metadata_changed:
             self.init_sources(progress_factory=progress_factory)
         sources = self.sources
