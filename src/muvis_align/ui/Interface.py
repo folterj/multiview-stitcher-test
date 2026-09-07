@@ -35,7 +35,7 @@ from muvis_align.ui._utils import TemporarilyDisabledWidgets, VisibleActivityDoc
 from muvis_align.ui.bilayers_util import get_section_dict
 from muvis_align.util import print_dict_simple, set_dict_value, is_valid_value, \
     calculate_rigid_difference, operation_to_past_participle, eval_path, \
-    resolve_to_project_dir, relativize_to_project_dir, get_filetitle
+    resolve_to_project_dir, relativize_to_project_dir
 
 
 class ViewMode(Enum):
@@ -1255,8 +1255,13 @@ class Interface:
             # NapariDaskProgress's per-task count, which resets every iteration and says
             # nothing about how many of the sources are actually done.
             with progress_factory(total=len(msims), desc='Converting') as pbar:
-                for filename, msim in zip(self.reg.filenames, msims):
-                    output_filename = f'{output_folder}/{get_filetitle(filename)}'
+                # file_labels (get_unique_file_labels()) are already disambiguated against every
+                # other source - get_filetitle(filename) alone is not: two sources whose raw
+                # filenames only differ by parent directory (e.g. S000/000_000.tiff vs
+                # S001/000_000.tiff) would both title as "000_000" and silently overwrite each
+                # other's output
+                for label, msim in zip(self.reg.file_labels, msims):
+                    output_filename = f'{output_folder}/{label}'
                     self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
                     pbar.update(1)
         return True
