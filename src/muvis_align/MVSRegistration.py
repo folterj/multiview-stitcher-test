@@ -1558,14 +1558,25 @@ class MVSRegistration:
                    ome_version=ome_version,
                    verbose=self.verbose)
 
-    def save_native_levels(self, output_filename, msim, channels=None, min_length=128,
+    def save_native_levels(self, output_filename, msim, position=None, channels=None, min_length=128,
                            compression=None, ome_version=default_ome_zarr_version):
         """Write msim's own native pyramid levels exactly as-is (no resampling) - see
-        save_ome_multiscale_levels(). Used by convert, which never fuses/resamples a source."""
+        save_ome_multiscale_levels(). Used by convert, which never fuses/resamples a source.
+
+        position: this source's own {'z': ..., ...} (self.positions[index]) - a source with no
+        native 'z' dim (e.g. a single 2D tile) only carries its z height as this separate,
+        external metadata, not in its own sim coords. Without promoting, the written file would
+        silently drop that z position entirely instead of storing it as a size-1 'z' dim/
+        translation - same promotion build_source_shape_sim()/make_msims_3d() already apply for
+        shapes/fusion.
+        """
         if output_filename is not None:
             output_filename = self.output + output_filename
         if channels is None:
             channels = self.extra_metadata.get('channels', []) if isinstance(self.extra_metadata, dict) else []
+
+        if position is not None and 'z' not in get_msim_dims(msim):
+            msim = make_msims_3d([msim], z_scale=self._msim_z_scale, positions=[position])[0]
 
         scale_keys = msi_utils.get_sorted_scale_keys(msim)
         images = [msim[scale_key].ds['image'] for scale_key in scale_keys]

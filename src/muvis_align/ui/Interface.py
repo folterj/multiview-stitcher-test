@@ -1175,7 +1175,7 @@ class Interface:
         if 'convert' in self.params['registration']['operation']:
             # convert: each source written out individually at its own source/metadata
             # position, no registration and no fusion/blending - never reaches the fusion tab
-            reply = QMessageBox.question(None, 'muvis-align', 'Convert data?',
+            reply = QMessageBox.question(None, 'muvis-align', 'Convert data to OME-Zarr only?',
                                          QMessageBox.Yes|QMessageBox.No)
             if reply == QMessageBox.Yes:
                 if self.run_convert():
@@ -1260,9 +1260,10 @@ class Interface:
                 # filenames only differ by parent directory (e.g. S000/000_000.tiff vs
                 # S001/000_000.tiff) would both title as "000_000" and silently overwrite each
                 # other's output
-                for label, msim in zip(self.reg.file_labels, msims):
+                for label, position, msim in zip(self.reg.file_labels, self.reg.positions, msims):
                     output_filename = f'{output_folder}/{label}'
-                    self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
+                    self.reg.save_native_levels(output_filename, msim, position=position,
+                                                ome_version=ome_version)
                     pbar.update(1)
         return True
 
