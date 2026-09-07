@@ -347,6 +347,9 @@ def build_source_shape_sim(source, output_order, translation, transform, transfo
     own overlap-bbox math) - bounding-box geometry is resolution-invariant, so a single level is
     sufficient.
 
+    A source like ZarrImageSource never populates self.data (its msim is already built natively,
+    so get_level_data() is just as cheap there) - fall back to that instead of source.data[level].
+
     promote_z=True mirrors make_msims_3d()'s own promotion (see promote_sim_to_3d()) for the
     case where output_order itself has no 'z' (every source is individually 2D) but different
     sources sit at different z heights (e.g. a z-stack of 2D tiles) - without this, a source's
@@ -354,8 +357,9 @@ def build_source_shape_sim(source, output_order, translation, transform, transfo
     if size-1, 'z' dim/coordinate on the returned sim.
     """
     c_coords = [channel.get('label', '') for channel in source.get_channels()]
+    level_data = source.data[level] if source.data else source.get_level_data(level)
     image = si_utils.get_sim_from_array(
-        source.data[level], dims=list(source.dimension_order),
+        level_data, dims=list(source.dimension_order),
         scale=source.pixel_sizes[level] or None, translation=dict(source.position) or None,
         affine=source.transform, transform_key=source.transform_key, c_coords=c_coords)
     image = redimension_sim_data(image, source.dimension_order, output_order)

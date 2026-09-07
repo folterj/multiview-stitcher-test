@@ -1046,7 +1046,8 @@ class Interface:
         with NapariMVSProgress(tqdm_class=progress, patch_registration=True), \
                 NapariDaskProgress(progress_class=progress, desc='Pair registration'), \
                 TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                VisibleActivityDock(self.viewer):
+                VisibleActivityDock(self.viewer), \
+                Timer('pair registration', verbose=self._timing_verbose()):
             results = self.reg.register_pairs(self.reg.register_msims,
                                               params=self.params['registration'] | {'metrics': self.metrics_methods})
 
@@ -1066,7 +1067,8 @@ class Interface:
     def run_global_registration(self):
         with NapariDaskProgress(progress_class=progress, desc='Global registration'), \
                 TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                VisibleActivityDock(self.viewer):
+                VisibleActivityDock(self.viewer), \
+                Timer('global registration', verbose=self._timing_verbose()):
             results = self.reg.register_global(self.reg.pair_msims,
                                                register_indices=self.reg.register_indices,
                                                params=self.params['registration'])
@@ -1181,11 +1183,12 @@ class Interface:
         reply = QMessageBox.question(None, 'muvis-align', message,
                                      QMessageBox.Yes|QMessageBox.No)
         if reply == QMessageBox.Yes:
-            if not self.reg.is_pairs_registered():
-                if not self.run_pair_registration():
+            with Timer('registration process', verbose=self._timing_verbose()):
+                if not self.reg.is_pairs_registered():
+                    if not self.run_pair_registration():
+                        return
+                if not self.run_global_registration():
                     return
-            if not self.run_global_registration():
-                return
             copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
             self.enable_tabs(True, 4)
             self.update_registered(view_transform_key=self.reg.reg_transform_key)
@@ -1217,7 +1220,8 @@ class Interface:
             tile_size = int(tile_size.strip())
         with NapariMVSProgress(tqdm_class=progress, desc='Fusion', patch_fusion=True), \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer):
+             VisibleActivityDock(self.viewer), \
+             Timer('fusion', verbose=self._timing_verbose()):
             fused_image, is_saved = self.reg.fuse(self.reg.msims,
                                                   fusion_method=self.params['fusion']['method'],
                                                   output_spacing=self.params['fusion']['spacing'],

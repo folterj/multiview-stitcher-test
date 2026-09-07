@@ -21,7 +21,8 @@ class Pipeline(Thread):
         log_filename = params_logging.get('filename', 'log/muvis-align.log')
         log_format = params_logging.get('format', '%(asctime)s %(levelname)s: %(message)s')
         self.verbose = params_logging.get('verbose', False)
-        init_logging(log_filename, log_format, self.verbose)
+        self.debug = params_logging.get('debug', False)
+        init_logging(log_filename, log_format, verbose=self.verbose, debug=self.debug)
 
     def run(self):
         break_on_error = self.params_general.get('break_on_error', False)
