@@ -1232,7 +1232,8 @@ class Interface:
             # silently as a side effect of the save loop below
             msims = self.reg.ensure_msims(progress_factory=progress_factory)
 
-        with NapariDaskProgress(progress_class=progress, desc='Convert'), \
+        with NapariPreprocessProgress(progress_class=progress, desc='Converting',
+                                      min_duration=0.1) as progress_factory, \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
              VisibleActivityDock(self.viewer), \
              Timer('convert', verbose=self._timing_verbose()):
@@ -1249,9 +1250,15 @@ class Interface:
             # event loop (observed as a Windows PermissionError racing on a store's zarr.json
             # rename) - each write already parallelises its own array computation across every
             # core via dask's default threaded scheduler, which is enough on its own.
-            for filename, msim in zip(self.reg.filenames, msims):
-                output_filename = f'{output_folder}/{get_filetitle(filename)}'
-                self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
+            #
+            # A per-source count (files converted so far) is meaningful here, unlike
+            # NapariDaskProgress's per-task count, which resets every iteration and says
+            # nothing about how many of the sources are actually done.
+            with progress_factory(total=len(msims), desc='Converting') as pbar:
+                for filename, msim in zip(self.reg.filenames, msims):
+                    output_filename = f'{output_folder}/{get_filetitle(filename)}'
+                    self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
+                    pbar.update(1)
         return True
 
     @catch_run_errors
