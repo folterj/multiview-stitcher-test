@@ -27,6 +27,7 @@ from muvis_align.file.transforms import write_transforms, read_transforms
 from muvis_align.image.Video import Video
 from muvis_align.image.flatfield import flatfield_correction
 from muvis_align.image.ome_helper import save_image
+from muvis_align.image.ome_zarr_helper import save_ome_multiscale_levels
 from muvis_align.image.ome_tiff_helper import save_tiff
 from muvis_align.image.source_helper import create_image_source
 from muvis_align.image.util import *
@@ -1556,6 +1557,25 @@ class MVSRegistration:
                    pyramid_downsample=pyramid_downsample, npyramid_add=npyramid_add,
                    ome_version=ome_version,
                    verbose=self.verbose)
+
+    def save_native_levels(self, output_filename, msim, channels=None, pyramid_downsample=2,
+                           compression=None, ome_version=default_ome_zarr_version):
+        """Write msim's own native pyramid levels exactly as-is (no resampling) - see
+        save_ome_multiscale_levels(). Used by convert, which never fuses/resamples a source."""
+        if output_filename is not None:
+            output_filename = self.output + output_filename
+        if channels is None:
+            channels = self.extra_metadata.get('channels', []) if isinstance(self.extra_metadata, dict) else []
+
+        scale_keys = msi_utils.get_sorted_scale_keys(msim)
+        images = [msim[scale_key].ds['image'] for scale_key in scale_keys]
+        dim_order = ''.join(images[0].dims)
+        levels = [(image.data, si_utils.get_spacing_from_sim(image)) for image in images]
+        translation = si_utils.get_origin_from_sim(images[0])
+
+        save_ome_multiscale_levels(str(output_filename) + zarr_extension, levels, dim_order, channels,
+                                   translation, pyramid_downsample=pyramid_downsample,
+                                   compression=compression, ome_version=ome_version)
 
     def save_video(self, output, msims, fused_msim):
         logging.info('Creating transition video...')

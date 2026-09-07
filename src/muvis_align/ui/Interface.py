@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from enum import Enum, auto
 from magicclass.ext.napari import ViewerWidget
-from multiview_stitcher import msi_utils, spatial_image_utils as si_utils, param_utils
+from multiview_stitcher import spatial_image_utils as si_utils, param_utils
 from napari.utils import progress
 from napari.utils.notifications import show_warning
 import networkx as nx
@@ -1223,11 +1223,7 @@ class Interface:
     def run_convert(self):
         operation = self.params['registration']['operation']
         output_folder = operation_to_past_participle(operation)
-        tile_size = self.params['fusion']['tile_size']
-        if ',' in tile_size:
-            tile_size = [int(size.strip()) for size in tile_size.split(',')]
-        elif isinstance(tile_size, str):
-            tile_size = int(tile_size.strip())
+        ome_version = self.params['fusion']['ome_version']
         with NapariPreprocessProgress(progress_class=progress, desc='Initialising sources',
                                       bar_format=" ", min_duration=0.1) as progress_factory, \
              TemporarilyDisabledWidgets(self.enable_plugin_widget), \
@@ -1245,17 +1241,24 @@ class Interface:
             # work no per-source file needs), and is_channel_overlay would still combine sources
             # into a single multichannel image regardless of fusion_method whenever multiple
             # channels are configured. Each source is instead written out individually - one
-            # file per input, named after it, into its own output subfolder - never fused.
-            channels = self.extra_metadata.get('channels', [])
-            for filename, position, msim in zip(self.reg.filenames, self.reg.positions, msims):
-                sim = msi_utils.get_sim_from_msim(msim, scale='scale0')
+            # file per input, named after it, into its own output subfolder, keeping its own
+            # native pyramid levels exactly as-is (save_native_levels()) - never fused/resampled.
+            def convert_one(filename, msim):
                 output_filename = f'{output_folder}/{get_filetitle(filename)}'
-                self.reg.save(output_filename, sim,
-                              transform_key=self.reg.source_transform_key,
-                              translations0=[position],
-                              channels=channels,
-                              tile_size=tile_size,
-                              ome_version=self.params['fusion']['ome_version'])
+                self.reg.save_native_levels(output_filename, msim, ome_version=ome_version)
+
+            # each source writes to its own independent output file - safe (and, for hundreds of
+            # sources, much faster) to run across a thread pool rather than one at a time, same
+            # as init_sources()/fuse()'s own channel-overlay path
+            if len(msims) > 1:
+                max_workers = min(default_preview_workers, len(msims))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(convert_one, filename, msim)
+                              for filename, msim in zip(self.reg.filenames, msims)]
+                    for future in as_completed(futures):
+                        future.result()
+            elif msims:
+                convert_one(self.reg.filenames[0], msims[0])
         return True
 
     @catch_run_errors

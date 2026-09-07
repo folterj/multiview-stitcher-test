@@ -1,11 +1,13 @@
-from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr, Omero, OmeroChannel, OmeroWindow
+from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr, NgffMultiscales, \
+    Omero, OmeroChannel, OmeroWindow
+from ngff_zarr.v06.zarr_metadata import Metadata
 import ome_zarr.format
 import zarr
 
 from muvis_align.image.color_conversion import rgba_to_hexrgb
 from muvis_align.util import create_chunk_dict
 from muvis_align.constants import default_ome_zarr_version, default_chunk_size
-from muvis_align.image.util import create_compression_filter
+from muvis_align.image.util import create_compression_filter, build_missing_pyramid_levels
 from muvis_align.image.ome_zarr_util import get_channel_window
 
 
@@ -69,6 +71,66 @@ def save_ome_image(data, path, dim_order, pixel_size, channels, translation, rot
     to_ngff_zarr(path, multiscales, chunks_per_shard=chunks_per_shard, version=ome_version, **storage_options)
 
     return multiscales.metadata
+
+
+def save_ome_multiscale_levels(path, levels, dim_order, channels, translation,
+                               pyramid_downsample=2, min_size=default_chunk_size,
+                               compression=None, ome_version=default_ome_zarr_version):
+    """Write pre-built pyramid levels (e.g. a source's own native resolutions) exactly as
+    given - no resampling - unlike save_ome_image()/to_multiscales(), which always derives
+    every level but the first from one input via resampling. Only pads with additional coarser
+    levels, resampled from the smallest given level, if fewer than build_missing_pyramid_levels()'s
+    own stopping criterion (shrunk to at most min_size) would otherwise leave.
+
+    levels: list of (data, pixel_size) pairs, finest first - data can be numpy or dask.
+    """
+    storage_options = {}
+    compressor, compression_filters = create_compression_filter(compression)
+    if compressor is not None:
+        storage_options['compressor'] = compressor
+    if compression_filters is not None:
+        storage_options['filters'] = compression_filters
+
+    datas = [data for data, _ in levels]
+    pixel_sizes = [pixel_size for _, pixel_size in levels]
+    # build_missing_pyramid_levels() already implements "keep halving until <= min_size" -
+    # reused here from the smallest level already given, so it adds nothing when that's
+    # already small enough on its own
+    extra_datas, extra_pixel_sizes = build_missing_pyramid_levels(
+        datas[-1], dim_order, pixel_sizes[-1], pyramid_downsample=pyramid_downsample, min_size=min_size)
+    datas += extra_datas[1:]
+    pixel_sizes += extra_pixel_sizes[1:]
+
+    axes_units = {dim: 'micrometer' for dim in dim_order if dim in 'xyz'}
+    chunks = create_chunk_dict(default_chunk_size, dim_order)
+    images = []
+    datasets = []
+    coordinate_systems = None
+    for index, (data, pixel_size) in enumerate(zip(datas, pixel_sizes)):
+        # to_multiscales(scale_factors=[]) just wraps one already-built level with correct OME
+        # metadata (axes/coordinateSystems/scale/translation) - no resampling happens for it
+        ngff_image = to_ngff_image(data, dims=dim_order, scale=pixel_size, translation=translation,
+                                   axes_units=axes_units)
+        level_multiscales = to_multiscales(ngff_image, scale_factors=[], chunks=chunks)
+        images.append(level_multiscales.images[0])
+        dataset = level_multiscales.metadata.datasets[0]
+        dataset.path = f'scale{index}/image'
+        datasets.append(dataset)
+        if coordinate_systems is None:
+            coordinate_systems = level_multiscales.metadata.coordinateSystems
+
+    metadata = Metadata(coordinateSystems=coordinate_systems, datasets=datasets)
+    if channels:
+        omero = Omero(channels=[OmeroChannel(label=channel.get('label', f'Channel {index}'),
+                                             color=rgba_to_hexrgb(channel.get('color')),
+                                             window=OmeroWindow(**get_channel_window(images[-1].data, dim_order, index)))
+                                for index, channel in enumerate(channels)])
+        metadata.omero = omero
+
+    multiscales = NgffMultiscales(images=images, metadata=metadata)
+    to_ngff_zarr(path, multiscales, version=ome_version, **storage_options)
+
+    return metadata
 
 
 def get_ome_zarr_format(ome_version):
