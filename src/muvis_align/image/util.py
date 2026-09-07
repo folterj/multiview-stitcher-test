@@ -1047,6 +1047,15 @@ def calc_images_quantiles(images, quantiles):
 
 
 def get_image_quantile(image: np.ndarray, quantile: float, axis=None) -> float:
+    if hasattr(image, 'compute'):
+        # dask's own quantile/percentile are version-fragile (e.g. dask 2025.10 calling numpy's
+        # removed `interpolation=` kwarg) and dask.array.quantile has no whole-array mode besides
+        # (unlike numpy's axis=None) - this is only ever called on a small, already-coarsest-level
+        # image, so just materialize it once instead of depending on dask's own quantile at all
+        image = np.asarray(image.compute())
+    if axis is None:
+        image = image.ravel()
+        axis = 0
     value = np.quantile(image, quantile, axis=axis).astype(image.dtype)
     return np.array(value).item()
 
