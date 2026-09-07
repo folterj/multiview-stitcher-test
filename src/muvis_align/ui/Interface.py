@@ -1172,6 +1172,16 @@ class Interface:
         return param_utils.affine_to_xaffine(transform)
 
     def registration_process(self):
+        if 'convert' in self.params['registration']['operation']:
+            # convert: each source written out individually at its own source/metadata
+            # position, no registration and no fusion/blending - never reaches the fusion tab
+            reply = QMessageBox.question(None, 'muvis-align', 'Convert data?',
+                                         QMessageBox.Yes|QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                if self.run_convert():
+                    QMessageBox.information(None, 'muvis-align', 'Conversion completed')
+            return
+
         completion_message = 'Global registration completed'
         if self.reg.is_global_registered():
             message = 'Global registration was already performed. Run global registration?'
@@ -1208,6 +1218,45 @@ class Interface:
         # is_fused() branch) - unlike every other init_progress branch, it never otherwise goes
         # through update_views(), so the overview would stay empty without this
         self._refresh_overview_shapes(transform_key)
+
+    @catch_run_errors
+    def run_convert(self):
+        operation = self.params['registration']['operation']
+        output_filename = operation_to_past_participle(operation)
+        tile_size = self.params['fusion']['tile_size']
+        if ',' in tile_size:
+            tile_size = [int(size.strip()) for size in tile_size.split(',')]
+        elif isinstance(tile_size, str):
+            tile_size = int(tile_size.strip())
+        with NapariPreprocessProgress(progress_class=progress, desc='Initialising sources',
+                                      bar_format=" ", min_duration=0.1) as progress_factory, \
+             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
+             VisibleActivityDock(self.viewer):
+            # see run_pre_processing() - builds msims with its own progress reporting instead of
+            # silently as a side effect of the fuse() call below
+            msims = self.reg.ensure_msims(progress_factory=progress_factory)
+
+        with NapariDaskProgress(progress_class=progress, desc='Convert'), \
+             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
+             VisibleActivityDock(self.viewer), \
+             Timer('convert', verbose=self._timing_verbose()):
+            # fusion_method='compose': each source kept separate, at its own source/metadata
+            # position - no blending - fuse() is only used here for its shared
+            # is_channel_overlay/z-stacking handling, not for any real fusion
+            fused_image, is_saved = self.reg.fuse(msims,
+                                                  fusion_method='compose',
+                                                  transform_key=self.reg.source_transform_key,
+                                                  dimension=self.params['input_output']['registration_dimension'],
+                                                  extra_metadata=self.extra_metadata)
+            if not is_saved:
+                save_sims = extract_sims_from_fused(fused_image)
+                self.reg.save(output_filename, save_sims,
+                              transform_key=self.reg.source_transform_key,
+                              translations0=self.reg.positions,
+                              channels=self.extra_metadata.get('channels', []),
+                              tile_size=tile_size,
+                              ome_version=self.params['fusion']['ome_version'])
+        return True
 
     @catch_run_errors
     def run_fusion(self):

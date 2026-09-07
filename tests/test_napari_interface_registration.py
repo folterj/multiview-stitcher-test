@@ -316,7 +316,7 @@ class TestNapariInterfaceRegistration:
         
         with patch('muvis_align._widget.ViewerWidget'):
             interface = Interface(viewer, MagicMock(), MagicMock(), MagicMock())
-            interface.params = {'registration': {}}
+            interface.params = {'registration': {'operation': 'register'}}
         
         with patch.object(interface.reg, 'is_pairs_registered', return_value=True):
             with patch.object(interface.reg, 'is_global_registered', return_value=False):
@@ -1477,6 +1477,7 @@ def test_registration_process_confirmation_and_prerequisites(
     run_pair,
     run_global,
 ):
+    bare_interface.params = {"registration": {"operation": "register"}}
     bare_interface.reg.is_global_registered.return_value = False
     bare_interface.reg.is_pairs_registered.return_value = pairs_registered
     bare_interface.reg.msims = ["sim"]

@@ -237,6 +237,8 @@ parameters:
         value: "register"
       - label: Merge
         value: "merge"
+      - label: Convert
+        value: "convert"
     default: "register"
     cli_tag: "--operation"
     cli_order: 0
