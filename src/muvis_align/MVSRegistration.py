@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 import copy
 import dask
+import time
 from dask.diagnostics import ProgressBar
 from enum import Enum, auto
 import logging
@@ -440,21 +441,31 @@ class MVSRegistration:
             per_file_metadata.append(copy.deepcopy(source_metadata))
 
         with progress_context as pbar:
+            # per-file durations (list.append is atomic under the GIL, so plain appends from
+            # multiple worker threads are safe here without a lock) - only used to log where
+            # init_sources() actually spends its time; see below
+            file_times = []
+
             def build_source(index, matrix_size):
-                return create_image_source(
+                start = time.time()
+                source = create_image_source(
                     self.filenames[index], per_file_metadata[index], extra_metadata=self.extra_metadata,
                     file_label=self.file_labels[index], transform_key=self.source_transform_key,
                     matrix_size=matrix_size)
+                file_times.append(time.time() - start)
+                return source
 
             # matrix_size is decided once from the first source (matching the previous
             # is_3d-from-source0 behaviour) - build it on its own first, so every other source
             # below can be constructed with that already-known matrix_size from the start
+            phase_start = time.time()
             first_source = build_source(0, matrix_size=None)
             matrix_size = 4 if first_source.get_size().get('z', 0) > 1 else 3
             self.sources[0] = first_source
             if pbar is not None:
                 pbar.update(1)
 
+            max_workers = 1
             if nfiles > 1:
                 max_workers = min(default_source_init_workers, nfiles - 1)
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -465,6 +476,17 @@ class MVSRegistration:
                         self.sources[index] = future.result()
                         if pbar is not None:
                             pbar.update(1)
+
+        if self.logging_time and file_times:
+            wall_time = time.time() - phase_start
+            total_time = sum(file_times)
+            # wall_time close to total_time (despite max_workers > 1) points to GIL-bound work
+            # (e.g. Python-level tag/XML parsing) that more threads won't fix; wall_time well
+            # below total_time confirms it's I/O-wait being usefully overlapped instead, where
+            # more workers (default_source_init_workers) could still help
+            logging.info(f'Init sources: {len(file_times)} files with {max_workers} workers, '
+                        f'wall {wall_time:.1f}s, per-file total {total_time:.1f}s '
+                        f'(mean {1000 * total_time / len(file_times):.0f}ms, max {1000 * max(file_times):.0f}ms)')
 
     def init_data(self, source_metadata={}, extra_metadata={}, z_scale=None, target_scale=None, store=True,
                   progress_factory=None):
