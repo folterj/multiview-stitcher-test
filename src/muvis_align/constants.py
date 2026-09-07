@@ -9,16 +9,20 @@ default_chunk_size = 1024
 # init_sources() constructs one ImageSource per file, each mostly waiting on a file
 # open/header read rather than doing real CPU work - a thread pool overlaps that I/O latency
 # (dominant on slow/network storage, e.g. a shared HPC filesystem) instead of paying it out
-# serially file by file. Threads blocked on I/O don't consume CPU, so it's fine for this to
-# exceed the actual core count available - capped mainly to avoid opening an unreasonable
-# number of file handles against the filesystem at once. sched_getaffinity (Linux-only) reads
-# the process' real cpuset, which on a SLURM node reflects the job's actual allocation - unlike
-# os.cpu_count(), which reports the whole node regardless of what was allocated to this job.
+# serially file by file. Threads blocked on I/O don't consume CPU, so this is deliberately not
+# capped by core count (confirmed on a 4733-source, 32-worker run: wall time was ~32x less than
+# the summed per-file time, i.e. near-perfectly I/O-bound, not GIL/CPU-bound) - only by a fixed
+# ceiling, to avoid opening an unreasonable number of file handles/connections against the
+# filesystem at once.
 try:
+    # sched_getaffinity (Linux-only) reads the process' real cpuset, which on a SLURM node
+    # reflects the job's actual allocation - unlike os.cpu_count(), which reports the whole node
+    # regardless of what was allocated to this job. Only used by default_preview_workers below
+    # (genuinely CPU-bound work); init_sources' own worker count no longer depends on this.
     _available_cpus = len(os.sched_getaffinity(0))
 except AttributeError:
     _available_cpus = os.cpu_count() or 8
-default_source_init_workers = min(32, _available_cpus)
+default_source_init_workers = 64
 # per-source preview/fusion prep (building each source's own fuse graph, gathering contrast
 # limits/metadata) is genuine CPU-bound work, not I/O wait - unlike default_source_init_workers
 # above there's no file-handle concern capping it, so this uses every allocated core
