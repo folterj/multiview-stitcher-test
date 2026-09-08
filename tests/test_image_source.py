@@ -322,3 +322,30 @@ def test_extra_metadata_composes_with_own_rotation_transform():
     # reads the transform straight off the msim - no need to extract a sim just for this
     affine = msi_utils.get_transform_from_msim(source.msim, source.transform_key)
     np.testing.assert_allclose(np.array(affine), expected)
+
+
+def test_build_source_shape_sim_opens_no_source_data():
+    """Shape/overlap geometry must stay metadata-only.
+
+    Nothing downstream reads a pixel off these sims, so reaching for source.data (or
+    get_level_data(), which for OME-Zarr builds the whole msim) would open every source file
+    just to compute bounding boxes - and serially, on the GUI thread, undoing the parallel
+    deferral in ImageSource.data. That regression cost 7.5 minutes for 4733 TIFF sources and
+    11.4 for OME-Zarr, so the invariant is asserted rather than left to a comment.
+    """
+    from muvis_align.image.util import build_source_shape_sim
+
+    sources = [TiffImageSource(str(DATA_DIR / f)) for f in TIFF_FILES[:2]]
+    for source in sources:
+        assert source._data_loaded is False
+
+    sims = [build_source_shape_sim(source, 'tcyx', {'x': 0.0, 'y': 0.0}, None, 'source_metadata')
+            for source in sources]
+
+    for source, sim in zip(sources, sims):
+        assert source._data_loaded is False, 'shape geometry must not load the source arrays'
+        assert source._msim is None, 'shape geometry must not build the source msim'
+        # and it still describes the real image
+        assert sim.sizes['y'] == source.get_shape(0)[source.dimension_order.index('y')]
+        assert sim.sizes['x'] == source.get_shape(0)[source.dimension_order.index('x')]
+        assert sim.dtype == source.dtype

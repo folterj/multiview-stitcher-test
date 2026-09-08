@@ -5,6 +5,7 @@ import time
 
 import cv2 as cv
 import dask
+import dask.array as da
 import numpy as np
 from multiview_stitcher import msi_utils, param_utils, fusion, mv_graph
 from multiview_stitcher import spatial_image_utils as si_utils
@@ -376,15 +377,18 @@ def build_source_msim(source, output_order, translation, transform, transform_ke
 def build_source_shape_sim(source, output_order, translation, transform, transform_key, z_scale=None, level=0,
                            promote_z=False):
     """Cheap, single-level equivalent of build_source_msim(), for shape/overlap-shape geometry
-    only. Built straight from source.data[level] - never touches source.msim, so it never
-    triggers the full per-pyramid-level DataTree construction (the expensive part of
-    initialising a source). Only shape/dims/coords/transform are ever read off the result
-    downstream (si_utils.get_stack_properties_from_sim / get_origin_from_sim / multiview_stitcher's
-    own overlap-bbox math) - bounding-box geometry is resolution-invariant, so a single level is
-    sufficient.
+    only. Only shape/dims/coords/transform are ever read off the result downstream (si_utils.
+    get_stack_properties_from_sim / get_origin_from_sim / multiview_stitcher's own overlap-bbox
+    math) - never a pixel value, and bounding-box geometry is resolution-invariant, so a single
+    level is sufficient.
 
-    A source like ZarrImageSource never populates self.data (its msim is already built natively,
-    so get_level_data() is just as cheap there) - fall back to that instead of source.data[level].
+    Backed by a lazily-allocated placeholder of the right shape and dtype rather than the
+    source's own array, since nothing here reads the pixels: source.data/get_level_data() opens
+    the file (for OME-Zarr, builds the whole msim), which is exactly the work source
+    initialisation defers - see ImageSource.data. Reaching for it here would pay that cost for
+    every source, one at a time, just to compute bounding boxes: measured at ~95ms per source
+    for TIFF and ~145ms for OME-Zarr, i.e. 7.5 and 11.4 minutes across 4733 sources, and
+    serially, where init spreads the same work across every core.
 
     promote_z=True mirrors make_msims_3d()'s own promotion (see promote_sim_to_3d()) for the
     case where output_order itself has no 'z' (every source is individually 2D) but different
@@ -393,7 +397,14 @@ def build_source_shape_sim(source, output_order, translation, transform, transfo
     if size-1, 'z' dim/coordinate on the returned sim.
     """
     c_coords = [channel.get('label', '') for channel in source.get_channels()]
-    level_data = source.data[level] if source.data else source.get_level_data(level)
+    # all this has to carry is a shape and a dtype - one chunk, never computed. Deliberately a
+    # lazy dask array and not, say, a zero-strided numpy view over a single element: that is
+    # cheaper to create but the redimension/assign_coords below then materialise it into a real
+    # array (measured at 90ms per source for a 6400x6400 tile), where a lazy one is left alone.
+    # name=False skips dask's deterministic tokenization of it, worth a fraction of a ms here
+    # and pointless for a placeholder nothing will look up.
+    level_data = da.zeros(source.get_shape(level), dtype=source.dtype,
+                          chunks=source.get_shape(level), name=False)
     image = si_utils.get_sim_from_array(
         level_data, dims=list(source.dimension_order),
         scale=source.pixel_sizes[level] or None, translation=dict(source.position) or None,
