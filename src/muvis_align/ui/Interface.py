@@ -18,7 +18,7 @@ from muvis_align.constants import zarr_extension, default_transform_key, default
 from muvis_align.file.project_yaml import read_params, get_template_params, write_params, update_params
 from muvis_align.MVSRegistration import MVSRegistration, RegState
 from muvis_align.image.util import get_sim_physical_size, get_sim_position_final, \
-    create_image_shapes, create_overlap_shapes, build_source_shape_sim, \
+    create_image_shapes, create_overlap_shapes, build_source_stack_props, \
     draw_keypoints_matches_napari, get_transforms, copy_transforms_to_msims, \
     make_msims_3d, metric_to_rgb, get_msim_level_data, get_contrast_limits, \
     get_msim_image0, wrap_sims_as_msims, extract_sims_from_fused, extract_sims_from_msims, \
@@ -579,11 +579,14 @@ class Interface:
             # a real 'z' dim on its sim - otherwise it's silently dropped instead of drawn at its
             # actual z.
             promote_z = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
-            with Timer(f'_create_napari_shapes: build {len(self.reg.sources)} source shape sims',
+            with Timer(f'_create_napari_shapes: build {len(self.reg.sources)} source shape geometries',
                       verbose=self._timing_verbose()):
+                # stack properties, not sims: shapes need geometry only, so this reads, creates
+                # and allocates no image data at all (see build_source_stack_props)
                 msims = [
-                    build_source_shape_sim(source, self.reg._msim_output_order, translation, transform,
-                                           transform_key, z_scale=self.reg._msim_z_scale, promote_z=promote_z)
+                    build_source_stack_props(source, self.reg._msim_output_order, translation, transform,
+                                             transform_key, z_scale=self.reg._msim_z_scale,
+                                             promote_z=promote_z)
                     for source, translation, transform in
                     zip(self.reg.sources, self.reg.positions, self.reg._msim_transforms)
                 ]

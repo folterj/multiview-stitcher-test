@@ -374,21 +374,68 @@ def build_source_msim(source, output_order, translation, transform, transform_ke
     return DataTree.from_dict(datasets)
 
 
+def build_source_stack_props(source, output_order, translation, transform, transform_key,
+                             z_scale=None, level=0, promote_z=False):
+    """The geometry the shapes/overlap-shapes preview needs - shape, spacing, origin and
+    transform - derived straight from a source's metadata, allocating nothing.
+
+    This is all si_utils.get_stack_properties_from_sim() would have read back off a sim, so
+    building one first (and, with it, an array for the sim to wrap) is pure ceremony for a path
+    that never touches a pixel: drawing bounding boxes should not need image data to exist, let
+    alone be read. build_source_shape_sim() below still produces that sim for the one caller
+    that genuinely needs one - multiview_stitcher's exact overlap test takes sims - and is
+    itself built on this, so the two can never describe different geometry.
+
+    Mirrors build_source_shape_sim()'s own conventions exactly (there is a test asserting so):
+    a dim of output_order the source lacks becomes size 1; x/y default to origin 0 as soon as
+    any translation is given; and promote_z adds a size-1 'z' at the source's own z position,
+    widening the transform to 3D with it.
+    """
+    spatial_order = [dim for dim in si_utils.SPATIAL_IMAGE_DIMS if dim in 'zyx'
+                     and (dim in output_order or (promote_z and dim == 'z'))]
+    sizes = dict(zip(source.dimension_order, source.get_shape(level)))
+    shape = {dim: int(sizes.get(dim, 1)) for dim in spatial_order}
+
+    pixel_size = dict(source.pixel_sizes[level])
+    if 'z' in spatial_order and 'z' not in pixel_size:
+        pixel_size['z'] = abs(z_scale) if z_scale else 1
+    # si_utils derives spacing from the differences between coordinates, which a size-1 dim has
+    # none of - it reports 1.0 there whatever the nominal pixel size, so match that rather than
+    # the value the coords were built from
+    spacing = {dim: float(pixel_size.get(dim, 1)) if shape[dim] > 1 else 1.0
+               for dim in spatial_order}
+
+    translation_arg = dict(translation)
+    if translation_arg:
+        translation_arg.setdefault('x', 0)
+        translation_arg.setdefault('y', 0)
+    origin = {dim: float(translation_arg.get(dim, 0)) for dim in spatial_order}
+
+    if transform is None:
+        xaffine = param_utils.identity_transform(len([dim for dim in output_order if dim in 'xyz']))
+    else:
+        xaffine = param_utils.affine_to_xaffine(transform)
+    if promote_z:
+        xaffine = widen_xaffine_to_3d(xaffine)
+
+    stack_props = {'shape': shape, 'spacing': spacing, 'origin': origin}
+    if transform_key is not None:
+        stack_props['transform'] = xaffine
+    return stack_props
+
+
 def build_source_shape_sim(source, output_order, translation, transform, transform_key, z_scale=None, level=0,
                            promote_z=False):
-    """Cheap, single-level equivalent of build_source_msim(), for shape/overlap-shape geometry
-    only. Only shape/dims/coords/transform are ever read off the result downstream (si_utils.
-    get_stack_properties_from_sim / get_origin_from_sim / multiview_stitcher's own overlap-bbox
-    math) - never a pixel value, and bounding-box geometry is resolution-invariant, so a single
-    level is sufficient.
+    """Cheap, single-level equivalent of build_source_msim(), for the one consumer that needs an
+    actual sim rather than plain geometry: multiview_stitcher's exact (linprog) overlap test
+    takes sims. Everything else in the shapes path works off build_source_stack_props() instead,
+    which allocates nothing - see there.
 
-    Backed by a lazily-allocated placeholder of the right shape and dtype rather than the
-    source's own array, since nothing here reads the pixels: source.data/get_level_data() opens
-    the file (for OME-Zarr, builds the whole msim), which is exactly the work source
-    initialisation defers - see ImageSource.data. Reaching for it here would pay that cost for
-    every source, one at a time, just to compute bounding boxes: measured at ~95ms per source
-    for TIFF and ~145ms for OME-Zarr, i.e. 7.5 and 11.4 minutes across 4733 sources, and
-    serially, where init spreads the same work across every core.
+    Built from those same stack properties, so the two cannot describe different geometry, and
+    wrapping a lazily-allocated placeholder of the right shape and dtype rather than the
+    source's own array: nothing here reads a pixel, while source.data/get_level_data() would
+    open the file (for OME-Zarr, build the whole msim), which is exactly the work source
+    initialisation defers - see ImageSource.data.
 
     promote_z=True mirrors make_msims_3d()'s own promotion (see promote_sim_to_3d()) for the
     case where output_order itself has no 'z' (every source is individually 2D) but different
@@ -396,45 +443,32 @@ def build_source_shape_sim(source, output_order, translation, transform, transfo
     own z position/translation would otherwise be silently dropped instead of becoming a real,
     if size-1, 'z' dim/coordinate on the returned sim.
     """
+    stack_props = build_source_stack_props(source, output_order, translation, transform,
+                                           transform_key, z_scale=z_scale, level=level,
+                                           promote_z=promote_z)
     c_coords = [channel.get('label', '') for channel in source.get_channels()]
-    # all this has to carry is a shape and a dtype - one chunk, never computed. Deliberately a
-    # lazy dask array and not, say, a zero-strided numpy view over a single element: that is
-    # cheaper to create but the redimension/assign_coords below then materialise it into a real
-    # array (measured at 90ms per source for a 6400x6400 tile), where a lazy one is left alone.
-    # name=False skips dask's deterministic tokenization of it, worth a fraction of a ms here
-    # and pointless for a placeholder nothing will look up.
-    level_data = da.zeros(source.get_shape(level), dtype=source.dtype,
-                          chunks=source.get_shape(level), name=False)
+    return sim_from_stack_props(stack_props, source.dtype, transform_key, c_coords=c_coords)
+
+
+def sim_from_stack_props(stack_props, dtype, transform_key, c_coords=None):
+    """A sim carrying exactly the geometry in `stack_props` and no image data of its own - for
+    the multiview_stitcher entry points that take sims but only ever read geometry off them.
+
+    The array behind it is a lazy one-chunk placeholder: it has to carry a shape and a dtype,
+    nothing more. Deliberately a dask array and not, say, a zero-strided numpy view over a
+    single element - that is far cheaper to create, but xarray then materialises it into a real
+    array (measured at 90ms for a 6400x6400 tile) where it leaves a lazy one alone. name=False
+    skips dask's deterministic tokenization, pointless for a placeholder nothing looks up.
+    """
+    spatial_dims = list(stack_props['shape'])
+    shape = tuple(stack_props['shape'][dim] for dim in spatial_dims)
+    data = da.zeros(shape, dtype=dtype, chunks=shape, name=False)
     image = si_utils.get_sim_from_array(
-        level_data, dims=list(source.dimension_order),
-        scale=source.pixel_sizes[level] or None, translation=dict(source.position) or None,
-        affine=source.transform, transform_key=source.transform_key, c_coords=c_coords)
-    image = redimension_sim_data(image, source.dimension_order, output_order)
-    image = ensure_spatial_image_dims(image, c_coords=c_coords)
-
-    if transform is None:
-        spatial_dims = [dim for dim in output_order if dim in 'xyz']
-        xaffine = param_utils.identity_transform(len(spatial_dims))
-    else:
-        xaffine = param_utils.affine_to_xaffine(transform)
-
-    translation_arg = dict(translation)
-    if translation_arg:
-        if 'x' not in translation_arg:
-            translation_arg['x'] = 0
-        if 'y' not in translation_arg:
-            translation_arg['y'] = 0
-
-    pixel_size = dict(source.pixel_sizes[level])
-    if 'z' in output_order and 'z' not in pixel_size:
-        pixel_size['z'] = abs(z_scale) if z_scale else 1
-    spatial_dims = si_utils.get_spatial_dims_from_sim(image)
-    new_coords = {dim: translation_arg.get(dim, 0) + np.arange(image.sizes[dim]) * pixel_size.get(dim, 1)
-                  for dim in spatial_dims}
-    image = image.assign_coords(new_coords)
-    si_utils.set_sim_affine(image, xaffine, transform_key)
-    if promote_z:
-        image = promote_sim_to_3d(image, translation.get('z', 0))
+        data, dims=spatial_dims,
+        scale=stack_props['spacing'], translation=stack_props['origin'],
+        transform_key=transform_key, c_coords=c_coords)
+    if 'transform' in stack_props:
+        si_utils.set_sim_affine(image, stack_props['transform'], transform_key)
     return image
 
 
@@ -1706,28 +1740,44 @@ def sims_from_sims_or_msims(items):
            for item in items]
 
 
-def create_image_shapes(sims, transform_key=None,  force_2d=False):
-    # accepts sims or msims - only position/size metadata is read, never pixel data
-    sims = sims_from_sims_or_msims(sims)
-    shapes = []
-    is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(sim).get('z', 0) for sim in sims])) > 1)
-    for sim in sims:
+def stack_props_from_any(items, transform_key=None):
+    """Normalises sims, msims or already-built stack-properties dicts to stack properties -
+    the only thing the shapes path actually reads. A caller that has geometry but no image data
+    (build_source_stack_props()) can therefore feed these functions directly, without an array
+    having to be conjured up for it first.
+    """
+    stack_props = []
+    for item in items:
+        if isinstance(item, dict):
+            stack_props.append(item)
+            continue
+        sim = msi_utils.get_sim_from_msim(item, scale='scale0') if isinstance(item, DataTree) else item
         if 't' in sim.dims:
             sim = sim.sel(t=0)
-        stack_props = si_utils.get_stack_properties_from_sim(sim, transform_key=transform_key)
+        stack_props.append(si_utils.get_stack_properties_from_sim(sim, transform_key=transform_key))
+    return stack_props
+
+
+def create_image_shapes(items, transform_key=None,  force_2d=False):
+    # accepts sims, msims or stack properties - only position/size metadata is read, never pixel
+    # data, and never anything that would make a source open its file
+    all_stack_props = stack_props_from_any(items, transform_key)
+    shapes = []
+    is_multi_z_shapes = (len(set([props['origin'].get('z', 0) for props in all_stack_props])) > 1)
+    for stack_props in all_stack_props:
         points = mv_graph.get_vertices_from_stack_props(stack_props)
         if points.shape[1] == 3 and (len(set(points[:, 0])) == 1 or force_2d):
             # remove constant z coordinate
             points = points[:, 1:]
         shape = _minimal_bb_vertices(points)
         if is_multi_z_shapes:
-            z_position = si_utils.get_origin_from_sim(sim).get('z', 0)
+            z_position = stack_props['origin'].get('z', 0)
             shape = [[z_position] + list(element) for element in shape]
         shapes.append(shape)
     return shapes
 
 
-def _filter_candidate_overlap_pairs(sims, transform_key):
+def _filter_candidate_overlap_pairs(all_stack_props):
     """Every-pair candidates (np.triu_indices), narrowed to those whose axis-aligned bounding
     boxes actually overlap - a cheap, vectorized numpy broad phase in front of
     _get_overlap_bboxes' exact (linear-programming-based) intersection test, which is the
@@ -1742,12 +1792,9 @@ def _filter_candidate_overlap_pairs(sims, transform_key):
     AABB intersection, skipping the linprog solve entirely for this (pre-registration, no
     rotation yet) case.
     """
-    mins = np.empty((len(sims), 3))
-    maxs = np.empty((len(sims), 3))
-    for index, sim in enumerate(sims):
-        if 't' in sim.dims:
-            sim = sim.sel(t=0)
-        stack_props = si_utils.get_stack_properties_from_sim(sim, transform_key=transform_key)
+    mins = np.empty((len(all_stack_props), 3))
+    maxs = np.empty((len(all_stack_props), 3))
+    for index, stack_props in enumerate(all_stack_props):
         points = mv_graph.get_vertices_from_stack_props(stack_props)
         ndims = points.shape[1]
         mins[index] = 0
@@ -1758,17 +1805,27 @@ def _filter_candidate_overlap_pairs(sims, transform_key):
         np.all(mins[:, None, :] <= maxs[None, :, :], axis=-1)
         & np.all(mins[None, :, :] <= maxs[:, None, :], axis=-1)
     )
-    iu = np.triu_indices(len(sims), 1)
+    iu = np.triu_indices(len(all_stack_props), 1)
     pairs = np.transpose(iu)[overlaps[iu]]
     return pairs, mins, maxs
 
 
-def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
-    # accepts sims or msims - only position/size metadata is read, never pixel data
-    sims = sims_from_sims_or_msims(sims)
+def create_overlap_shapes(items, transform_key, pairs=None, force_2d=False, dtype=np.uint8):
+    # accepts sims, msims or stack properties. Geometry is all this needs, and the common path
+    # (broad phase + the AABB fast path below) works off stack properties alone - only
+    # multiview_stitcher's exact overlap test insists on sims, so those are built, per pair that
+    # actually reaches it, from the same properties (see get_pair_sim).
+    all_stack_props = stack_props_from_any(items, transform_key)
+    sims = None if any(isinstance(item, dict) for item in items) else sims_from_sims_or_msims(items)
+
+    def get_pair_sim(index):
+        if sims is not None:
+            return squeeze_sim_transform_time(sims[index], transform_key)
+        return sim_from_stack_props(all_stack_props[index], dtype, transform_key)
+
     shapes = []
     good_pairs = []
-    is_multi_z_shapes = (len(set([si_utils.get_origin_from_sim(sim).get('z', 0) for sim in sims])) > 1)
+    is_multi_z_shapes = (len(set([props['origin'].get('z', 0) for props in all_stack_props])) > 1)
     # aabbs is only set for the broad-phase-discovered case below (no pair_registration graph
     # yet to restrict candidates to, e.g. initial project load) - there, sources still sit at
     # their raw source_metadata transform (no rotation applied yet), so each surviving pair's
@@ -1781,17 +1838,18 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
     aabbs = None
     if pairs is None:
         broad_phase_start = time.time()
-        pairs, mins, maxs = _filter_candidate_overlap_pairs(sims, transform_key)
+        pairs, mins, maxs = _filter_candidate_overlap_pairs(all_stack_props)
         aabbs = (mins, maxs)
-        logging.info(f'create_overlap_shapes: {len(pairs)} candidate pairs from {len(sims)} sims'
+        logging.info(f'create_overlap_shapes: {len(pairs)} candidate pairs from'
+                     f' {len(all_stack_props)} sims'
                      f' (broad phase: {time.time() - broad_phase_start:.1f}s)')
     n_exact_tests = 0
     exact_test_time = 0.0
     n_fast_shapes = 0
     for pair in pairs:
-        sim1 = squeeze_sim_transform_time(sims[pair[0]], transform_key)
-        sim2 = squeeze_sim_transform_time(sims[pair[1]], transform_key)
-        shape_z_position = si_utils.get_origin_from_sim(sim1).get('z', 0)
+        props1 = all_stack_props[pair[0]]
+        props2 = all_stack_props[pair[1]]
+        shape_z_position = props1['origin'].get('z', 0)
         process_pair = True
 
         # Multi-section 2D data is promoted to singleton-z images for napari.
@@ -1800,12 +1858,10 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
         # coordinate is restored to the resulting shape below.
         if (
             force_2d
-            and sim1.sizes.get('z') == 1
-            and sim2.sizes.get('z') == 1
+            and props1['shape'].get('z') == 1
+            and props2['shape'].get('z') == 1
         ):
-            z1 = si_utils.get_origin_from_sim(sim1).get('z', 0)
-            z2 = si_utils.get_origin_from_sim(sim2).get('z', 0)
-            process_pair = (z1 == z2)
+            process_pair = (props1['origin'].get('z', 0) == props2['origin'].get('z', 0))
 
         if not process_pair:
             continue
@@ -1817,7 +1873,7 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
                 # z axis (matching the exact path's own points[:, 1:] below), columns 1/2 the
                 # real spatial extent
                 axes = slice(1, 3)
-            elif 'z' in sim1.dims and 'z' in sim2.dims:
+            elif 'z' in props1['shape'] and 'z' in props2['shape']:
                 axes = slice(0, 3)
             else:
                 axes = slice(0, 2)
@@ -1834,6 +1890,8 @@ def create_overlap_shapes(sims, transform_key, pairs=None, force_2d=False):
             good_pairs.append(pair)
             continue
 
+        # only from here on is an actual sim needed - the exact test below is multiview_stitcher's
+        sim1, sim2 = get_pair_sim(pair[0]), get_pair_sim(pair[1])
         if force_2d:
             projected_sims = []
             for sim in (sim1, sim2):
@@ -2039,14 +2097,24 @@ def promote_sim_to_3d(sim, z_position):
         sim = sim.expand_dims({'z': [z_position]}, axis=-3)
     for transform_key in si_utils.get_tranform_keys_from_sim(sim):
         transform = si_utils.get_affine_from_sim(sim, transform_key=transform_key)
-        if 4 not in transform.shape:
-            transform_3d = param_utils.identity_transform(ndim=3)
-            if 't' in transform.dims:
-                transform_3d.loc[{dim: transform.coords[dim] for dim in transform.sel(t=0).dims}] = transform.sel(t=0)
-            else:
-                transform_3d.loc[{dim: transform.coords[dim] for dim in transform.dims}] = transform
+        transform_3d = widen_xaffine_to_3d(transform)
+        if transform_3d is not transform:
             si_utils.set_sim_affine(sim, transform_3d, transform_key=transform_key)
     return sim
+
+
+def widen_xaffine_to_3d(transform):
+    """A 2D affine widened into 3D, its own block embedded in a 3D identity - returned unchanged
+    if it is already 3D. Shared by promote_sim_to_3d() and build_source_stack_props(), so a
+    promoted sim and the stack properties derived without one carry the same transform.
+    """
+    if 4 in transform.shape:
+        return transform
+    transform_3d = param_utils.identity_transform(ndim=3)
+    if 't' in transform.dims:
+        transform = transform.sel(t=0)
+    transform_3d.loc[{dim: transform.coords[dim] for dim in transform.dims}] = transform
+    return transform_3d
 
 
 def make_msims_3d(msims, z_scale=None, positions=None):

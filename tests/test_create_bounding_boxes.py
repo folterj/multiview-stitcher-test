@@ -166,13 +166,11 @@ def test_minimal_bb_vertices_3d_always_has_eight_corners(points):
 
 def test_create_image_shapes_matches_oriented_box_for_3d():
     points = DATASETS["0"]
-    sim = MagicMock()
-    sim.dims = ("z", "y", "x")
+    stack_props = {'shape': {'z': 1, 'y': 4, 'x': 4}, 'spacing': {'z': 1.0, 'y': 1.0, 'x': 1.0},
+                   'origin': {'z': 0, 'y': 0.0, 'x': 0.0}}
 
-    with patch("muvis_align.image.util.si_utils.get_origin_from_sim", return_value={"z": 0}):
-        with patch("muvis_align.image.util.si_utils.get_stack_properties_from_sim", return_value=object()):
-            with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
-                shape = create_image_shapes([sim], transform_key=None, force_2d=False)[0]
+    with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
+        shape = create_image_shapes([stack_props], transform_key=None, force_2d=False)[0]
 
     expected = _minimal_bb_vertices(points)
     np.testing.assert_allclose(shape, expected)
@@ -230,13 +228,13 @@ def test_oriented_edge_path_is_applied_to_napari_layer():
 
 def test_create_image_shapes_matches_oriented_box_for_force_2d():
     points = DATASETS['0']
-    sim = MagicMock()
-    sim.dims = ("z", "y", "x")
+    # create_image_shapes takes stack properties directly, so the geometry can be handed over
+    # as-is rather than mocked onto a sim
+    stack_props = {'shape': {'z': 1, 'y': 4, 'x': 4}, 'spacing': {'z': 1.0, 'y': 1.0, 'x': 1.0},
+                   'origin': {'z': 0, 'y': 0.0, 'x': 0.0}}
 
-    with patch("muvis_align.image.util.si_utils.get_origin_from_sim", return_value={"z": 0}):
-        with patch("muvis_align.image.util.si_utils.get_stack_properties_from_sim", return_value=object()):
-            with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
-                shape = create_image_shapes([sim], transform_key=None, force_2d=True)[0]
+    with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
+        shape = create_image_shapes([stack_props], transform_key=None, force_2d=True)[0]
 
     expected = _minimal_bb_vertices(points[:, 1:])
     np.testing.assert_allclose(shape, expected)
@@ -255,13 +253,11 @@ def test_minimal_bb_vertices_2d_is_a_simple_non_crossing_rectangle(points):
 
 @pytest.mark.parametrize("points", DATASET_CASES)
 def test_create_image_shapes_force_2d_is_simple_non_crossing_rectangle(points):
-    sim = MagicMock()
-    sim.dims = ("z", "y", "x")
+    stack_props = {'shape': {'z': 1, 'y': 4, 'x': 4}, 'spacing': {'z': 1.0, 'y': 1.0, 'x': 1.0},
+                   'origin': {'z': 0, 'y': 0.0, 'x': 0.0}}
 
-    with patch("muvis_align.image.util.si_utils.get_origin_from_sim", return_value={"z": 0}):
-        with patch("muvis_align.image.util.si_utils.get_stack_properties_from_sim", return_value=object()):
-            with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
-                shape = create_image_shapes([sim], transform_key=None, force_2d=True)[0]
+    with patch("muvis_align.image.util.mv_graph.get_vertices_from_stack_props", return_value=points):
+        shape = create_image_shapes([stack_props], transform_key=None, force_2d=True)[0]
 
     shape = np.asarray(shape)
     assert shape.shape == (4, 2)
