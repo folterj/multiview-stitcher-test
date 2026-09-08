@@ -5,6 +5,7 @@ import cv2 as cv
 from datetime import datetime
 import glob
 import json
+import logging
 import math
 import numpy as np
 import os.path
@@ -445,15 +446,37 @@ def get_value_units_micrometer(value_units0: list|dict) -> list|dict|None:
     return values_um
 
 
+um_conversions = {
+    'Å': 1e-4, 'A': 1e-4, 'angstrom': 1e-4,
+    'pm': 1e-6, 'picometer': 1e-6,
+    'nm': 1e-3, 'nanometer': 1e-3,
+    'µm': 1, 'um': 1, 'micrometer': 1, 'micron': 1,
+    'mm': 1e3, 'millimeter': 1e3,
+    'cm': 1e4, 'centimeter': 1e4,
+    'm': 1e6, 'meter': 1e6
+}
+
+
 def convert_to_um(value, unit):
-    conversions = {
-        'nm': 1e-3,
-        'µm': 1, 'um': 1, 'micrometer': 1, 'micron': 1,
-        'mm': 1e3, 'millimeter': 1e3,
-        'cm': 1e4, 'centimeter': 1e4,
-        'm': 1e6, 'meter': 1e6
-    }
-    return value * conversions.get(unit, 1)
+    """`value` in `unit`, converted to um. An unrecognised unit is left unscaled - but logged,
+    since silently treating it as um mis-scales geometry with nothing to show for it.
+
+    Both the OME abbreviations (a Plane's PositionXUnit, say) and the spelled-out NGFF names
+    (which ngff_zarr's _normalize_unit produces from them) have to be here: readers pass
+    whichever form they happen to hold, and every length unit OME can express should land on a
+    real factor either way. 'nanometer' in particular used to be missing while 'nm' was present,
+    so a nanometre-scale OME-TIFF read through the spelled-out name was silently scaled by 1.
+    """
+    if unit is None:
+        return value
+    factor = um_conversions.get(unit)
+    if factor is None:
+        factor = um_conversions.get(str(unit).lower())
+    if factor is None:
+        if str(unit).strip():
+            logging.warning(f'Unrecognised physical unit {unit!r}, treating values as um')
+        return value
+    return value * factor
 
 
 def convert_rational_value(value) -> float:

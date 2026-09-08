@@ -1,12 +1,14 @@
 import logging
 import os
+from math import ceil
 
 import numpy as np
 from multiview_stitcher import msi_utils, param_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 
 from muvis_align.constants import default_transform_key
-from muvis_align.image.util import combine_transforms, build_source_redimensioned_msim, build_missing_pyramid_levels
+from muvis_align.image.util import (combine_transforms, build_source_redimensioned_msim,
+                                    build_missing_pyramid_levels, calc_pyramid_level_factors)
 from muvis_align.util import (find_all_numbers, split_numeric_dict, eval_context, check_contains_value,
                               create_transform, load_sbemimage_best_config, adjust_sbemimage_properties)
 
@@ -30,28 +32,49 @@ class ImageSource:
         self.position = {}
         self.rotation = 0
         self.channels = []
-        self.data = []
+        self._data = []
         self.metadata = {}
         self.transform = None
         self._msim = None
         self._redimensioned_msims = {}
+        self._data_loaded = False
         self.init_metadata()
         self.fix_metadata(source_metadata, extra_metadata, matrix_size)
-        self._add_missing_pyramid_levels()
-        if self._msim is not None:
-            # a subclass (e.g. ZarrImageSource) already built self.msim natively - re-stamp
-            # this run's final geometry onto it in place, instead of tearing it down to raw
-            # arrays and rebuilding a whole new msim from scratch via _build_msim()
-            self._restamp_msim()
-        # else: self.msim is built lazily on first access (see the msim property) - most
-        # sources (e.g. TiffImageSource) never need it during ordinary project load, only
-        # once real pixel-shaped data is actually requested (preview fusion, pre-processing)
+        # only the *metadata* for any synthesized coarse levels is settled here (pure shape
+        # arithmetic, no arrays) - the arrays themselves are built with the rest of self.data,
+        # on first access. Deciding it up front is what keeps get_shape/get_pixel_size/
+        # get_level_from_scale answering the same thing however early they are called, rather
+        # than growing extra levels the moment something first touches the pixel data.
+        self._add_missing_pyramid_level_metadata()
 
     @property
     def msim(self):
         if self._msim is None:
             self._build_msim()
         return self._msim
+
+    @property
+    def data(self):
+        """One array per pyramid level - loaded on first access, never during __init__.
+
+        Project load only ever reads metadata (shapes, pixel sizes, position, channels), so a
+        source that opened its arrays eagerly made every run pay for pixel-shaped data nothing
+        had asked for yet: measured at ~100ms per source for OME-Zarr and ~8ms for TIFF, i.e.
+        minutes across a few thousand sources.
+        """
+        if not self._data_loaded:
+            self._data_loaded = True
+            self._load_data()
+            self._add_missing_pyramid_level_data()
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        # a subclass that populates self.data straight from init_metadata()/_load_data() sets it
+        # through here; going through the property keeps _load_data() from running afterwards
+        # and overwriting it
+        self._data_loaded = True
+        self._data = value
 
     def get_msim(self, output_order):
         """self.msim redimensioned to `output_order`, built once and cached per output_order -
@@ -183,25 +206,64 @@ class ImageSource:
             else:
                 self.transform = np.array(combine_transforms([self.transform, transform2]))
 
-    def _add_missing_pyramid_levels(self):
-        # a source read from a non-pyramidal format (e.g. a plain TIFF) only ever has one real
-        # resolution in self.data - synthesize coarser levels up front so napari always has a
-        # small level to draw first, instead of having to realise the whole finest-level dask
-        # graph just for a zoomed-out overview. self.shapes/self.pixel_sizes are extended to
-        # match, since _build_msim() (and get_shape/get_pixel_size etc.) index them by level.
-        if len(self.data) != 1:
-            return
-        datas, pixel_sizes = build_missing_pyramid_levels(
-            self.data[0], self.dimension_order, self.pixel_sizes[0])
-        if len(datas) > 1:
-            self.data = datas
-            self.pixel_sizes = pixel_sizes
-            self.shapes = self.shapes + [data.shape for data in datas[1:]]
+    def _load_data(self):
+        """Populate self._data with one array per level of the source's own pyramid. Called once,
+        on first access to self.data - a subclass with no raw arrays to offer (e.g.
+        ZarrImageSource, whose msim is read natively) simply leaves it empty.
+        """
+
+    def _synthesized_level_factors(self):
+        """Cumulative downsample factors of the coarse levels this source has to synthesize -
+        empty unless it is single-resolution (a plain, non-pyramidal TIFF).
+
+        A source with only one real resolution leaves napari with no coarse level to show while
+        zoomed out, so drawing it forces computing the *entire* finest-level dask graph just to
+        render a thumbnail-sized view - the usual cause of a slow first draw despite loading
+        (building the lazy graph) itself being fast. Only formats that can subsample that one
+        level cheaply qualify: build_missing_pyramid_levels() slices an already-decoded page, so
+        it is near-free there, whereas a chunked store would have to read every chunk it touches
+        and gain nothing (hence ZarrImageSource offers no raw arrays at all - see _load_data).
+        """
+        if len(self.shapes) != 1:
+            return []
+        sizes = {dim: size for dim, size in zip(self.dimension_order, self.shape) if dim in 'xyz'}
+        return calc_pyramid_level_factors(sizes)
+
+    def _add_missing_pyramid_level_metadata(self):
+        # shapes/pixel_sizes/scale_factors for the levels _add_missing_pyramid_level_data() will
+        # later build, derived from the finest level's shape alone - no arrays needed, so this
+        # settles during __init__ while the arrays themselves stay deferred. _build_msim() (and
+        # get_shape/get_pixel_size etc.) index these by level.
+        axes = {dim: axis for axis, dim in enumerate(self.dimension_order)}
+        for level_factors in self._synthesized_level_factors():
+            shape = tuple(ceil(size / level_factors.get(dim, 1))
+                          for dim, size in zip(self.dimension_order, self.shape))
+            self.shapes.append(shape)
+            # from the realised extent ratio, not the requested factor: strided slicing rounds
+            # up, so a small or odd extent shrinks by less than its factor (z of 3 halved twice
+            # is 1, a ratio of 3, not 4) and the pixel size has to follow the pixels
+            self.pixel_sizes.append({dim: value * self.shape[axes[dim]] / shape[axes[dim]]
+                                     for dim, value in self.pixel_sizes[0].items()
+                                     if dim in axes})
+        if len(self.shapes) > 1:
             # keep scale_factors (as set by fix_metadata(), for get_level_from_scale()) in sync
-            # with the levels just added, rather than leaving it stuck at its single-level value
+            # with the levels just added, rather than leaving it at its single-level value
             self.scale_factors = [{dim: value0 / value for dim, value, value0
                                    in zip(self.dimension_order, shape, self.shape) if dim in 'xyz'}
                                    for shape in self.shapes]
+
+    def _add_missing_pyramid_level_data(self):
+        # the array half of the above, run once self._data actually exists
+        if len(self._data) != 1 or len(self.shapes) == 1:
+            return
+        datas, _ = build_missing_pyramid_levels(
+            self._data[0], self.dimension_order, self.pixel_sizes[0])
+        # both halves come from the same rule (calc_pyramid_level_factors), so they must agree -
+        # a mismatch would leave self.data and self.shapes describing different pyramids
+        assert [tuple(data.shape) for data in datas] == [tuple(shape) for shape in self.shapes], \
+            (f'{self.filename}: synthesized levels {[tuple(d.shape) for d in datas]} do not'
+             f' match the shapes settled at init {self.shapes}')
+        self._data = datas
 
     def _build_msim(self):
         # si_utils.get_sim_from_array forces a 'c' dim regardless (size 1 if not already in

@@ -15,6 +15,85 @@ try:
     _available_cpus = len(os.sched_getaffinity(0))
 except AttributeError:
     _available_cpus = os.cpu_count() or 8
+def _available_memory():
+    """Total memory this process may actually use, in bytes - the counterpart to
+    _available_cpus above, and read in the same spirit: what was *allocated* to this job, not
+    what the machine happens to have. A 2TB HPC node handed a 64GB job allocation must budget
+    against the 64GB, so the batch-system and cgroup limits are checked before the hardware.
+    Returns None if nothing here can tell, leaving callers to fall back to a fixed default.
+    """
+    # SLURM's own allocation, in MB (SLURM_MEM_PER_NODE wins; SLURM_MEM_PER_CPU is per
+    # allocated core, so scale it by the cpuset _available_cpus already reads)
+    for variable, multiplier in (('SLURM_MEM_PER_NODE', 1), ('SLURM_MEM_PER_CPU', _available_cpus)):
+        value = os.environ.get(variable)
+        if value:
+            try:
+                return int(float(value)) * multiplier * 1024 ** 2
+            except ValueError:
+                pass
+    # container/cgroup limit (v2 then v1) - 'max', or an implausibly huge sentinel, means unset
+    for path in ('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'):
+        try:
+            with open(path) as file:
+                limit = int(file.read().strip())
+            if 0 < limit < 1 << 60:
+                return limit
+        except (OSError, ValueError):
+            pass
+    try:
+        return os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
+    except (AttributeError, ValueError, OSError):
+        pass
+    try:
+        # Windows has no sysconf - ask the kernel directly rather than depend on psutil, which
+        # is not one of this package's declared dependencies
+        import ctypes
+
+        class _MemoryStatus(ctypes.Structure):
+            _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                        ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                        ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                        ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                        ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(_MemoryStatus)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullTotalPhys)
+    except Exception:
+        pass
+    return None
+
+
+_available_memory_bytes = _available_memory()
+# Per-output-chunk memory budget for fusion (see image.util.get_chunk_sizes). Fusion holds
+# fusion_stack_arrays float32 arrays of one chunk's shape, times the sources overlapping that
+# chunk - and dask's threaded scheduler runs one such chunk per worker at once, so the process
+# peak is roughly this times the worker count. Budgeting a quarter of the allocation across
+# those workers therefore leaves three quarters for everything else (source data, napari, the
+# fused result itself), and scales the way the machine does: a 2TB/64-core node lands at the
+# ceiling below, a 16GB laptop at a fraction of it. Sized per worker rather than as one global
+# pool because the workers genuinely each hold a chunk simultaneously.
+#
+# The ceiling matters as much as the budget: past a few GB a chunk stops being a useful unit of
+# parallel work (one task holding a whole zoomed-out view leaves 63 cores idle - the failure
+# mode this budget exists to avoid), so extra headroom is spent on more chunks, not bigger ones.
+default_fusion_chunk_bytes = min(4 * 1024 ** 3, max(
+    64 * 1024 ** 2,
+    int((_available_memory_bytes or 16 * 1024 ** 3) * 0.25 / max(1, _available_cpus))))
+# multiview_stitcher's fusion holds this many same-shaped float32 arrays per output chunk at
+# once: the stack of every overlapping source transformed into the chunk's grid, the matching
+# blending-weight stack, and their product (fusion._core's field_ims_t / field_ws_t). Used by
+# get_chunk_sizes() to size chunks against fusion's real peak memory rather than the output's
+# own byte size, which for thousands of sources differ by orders of magnitude.
+fusion_stack_arrays = 3
+# get_contrast_limits() computes a real min/max off the coarsest pyramid level. That level is
+# lazy, so the compute runs its whole fusion graph - fine when it is a handful of tasks, but
+# above this many it is no longer the "cheap, up-front" step it is meant to be and a naive
+# dtype-range guess is used instead (the user can auto-contrast from napari's own UI).
+default_contrast_limits_max_tasks = 4096
+
+
 # init_sources() constructs one ImageSource per file, each mostly waiting on a file
 # open/header read rather than doing real CPU work - a thread pool overlaps that I/O latency
 # (dominant on slow/network storage, e.g. a shared HPC filesystem) instead of paying it out

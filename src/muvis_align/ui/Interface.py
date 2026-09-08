@@ -20,7 +20,7 @@ from muvis_align.MVSRegistration import MVSRegistration, RegState
 from muvis_align.image.util import get_sim_physical_size, get_sim_position_final, \
     create_image_shapes, create_overlap_shapes, build_source_shape_sim, \
     draw_keypoints_matches_napari, get_transforms, copy_transforms_to_msims, \
-    make_msims_3d, metric_to_rgb, get_msim_level_data, get_contrast_limits, get_chunk_sizes, \
+    make_msims_3d, metric_to_rgb, get_msim_level_data, get_contrast_limits, \
     get_msim_image0, wrap_sims_as_msims, extract_sims_from_fused, extract_sims_from_msims, \
     select_msim_subpyramid_at_scale
 from muvis_align.file.resources import get_project_template
@@ -636,32 +636,17 @@ class Interface:
                 msims = select_msim_subpyramid_at_scale(view_msims, self.reg.sources, preview_scale)
         with Timer('_create_napari_data: copy_transforms_to_msims', verbose=self._timing_verbose()):
             copy_transforms_to_msims(self.reg.msims, msims, transform_key)
-        # A source chunked one z-slice at a time on disk would otherwise propagate that
-        # z=1 chunking into every pyramid level of the preview (each level then has as many
-        # dask tasks in z as there are z-slices, even once XY has been downsampled to a
-        # handful of pixels), ballooning dask graph-construction time. But a single chunk
-        # spanning the whole z range is just as bad from the other direction: napari can only
-        # compute a chunk as a whole, so viewing one z-slice forces fusing every slice in its
-        # chunk. get_chunk_sizes keeps x/y generous (shown in full for any view) and derives a
-        # small z chunk from the byte budget instead, since z is what napari slices through.
-        image0 = get_msim_image0(msims[0])
-        spatial_dims = si_utils.get_spatial_dims_from_sim(image0)
-        # MVSRegistration.fuse() (below) promotes msims to 3D internally (make_msims_3d) whenever
-        # sources sit at more than one distinct z position, regardless of whether msims already
-        # has a 'z' dim here - output_chunksize must already account for that dim in that case,
-        # since fuse() computes its own output_stack_properties from the (by-then 3D) msims, not
-        # from whatever's passed in here as output_chunksize
-        z_positions = [position.get('z') for position in self.reg.positions if 'z' in position]
-        if len(set(z_positions)) > 1 and 'z' not in spatial_dims:
-            spatial_dims = ['z'] + spatial_dims
-        output_chunksize = get_chunk_sizes(image0.dtype, spatial_dims)
+        # output_chunksize is deliberately left to fuse(), which derives it (get_chunk_sizes)
+        # from its own output_stack_properties - i.e. after its internal make_msims_3d promotion,
+        # so the 'z' that promotion introduces is already accounted for. Sizing it here instead
+        # would mean reproducing that promotion rule from the outside, against msims that may
+        # not have a 'z' dim yet.
         with Timer(f'_create_napari_data: fuse ({len(msims)} images)', verbose=self._timing_verbose()):
             fused_msim, _ = self.reg.fuse(msims,
                                           transform_key=transform_key,
                                           fusion_method=fusion_method,
                                           dimension=self.params['input_output']['registration_dimension'],
-                                          extra_metadata=self.extra_metadata,
-                                          output_chunksize=output_chunksize)
+                                          extra_metadata=self.extra_metadata)
         return fused_msim
 
     def _update_view_add_shapes(self, viewer, shapes, refs, labels, face_colors, layer_name):

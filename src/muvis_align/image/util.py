@@ -1,5 +1,6 @@
 import itertools
 import logging
+from math import ceil
 import time
 
 import cv2 as cv
@@ -25,7 +26,8 @@ try:
 except Exception as e:
     print(f'matplotlib import error:\n{e}')
 
-from muvis_align.constants import default_chunk_size
+from muvis_align.constants import (default_chunk_size, default_contrast_limits_max_tasks,
+                                   default_fusion_chunk_bytes, fusion_stack_arrays)
 from muvis_align.util import *
 
 
@@ -233,6 +235,34 @@ def rechunk_if_monolithic(image, chunk_size):
     return image
 
 
+def calc_pyramid_level_factors(sizes, pyramid_downsample=2, min_size=default_chunk_size):
+    """Cumulative per-dim downsample factor for each pyramid level needed *beyond* the one whose
+    spatial extents are `sizes` ({dim: size}), halving while the largest extent still exceeds
+    min_size - i.e. until a level small enough to draw a zoomed-out overview from exists.
+
+    The single definition of "how many coarser levels does this need, and how much coarser":
+    build_missing_pyramid_levels() applies it to synthesize those levels on the reader side, and
+    ome_zarr_helper.get_padding_scale_factors() to write them on the export side, so a written
+    file carries exactly the levels a reader would otherwise have had to invent. Sizes are
+    rounded up as they shrink, matching the strided slicing build_missing_pyramid_levels() uses
+    (data[::2] of 4097 rows is 2049, not 2048).
+    """
+    factors = []
+    if not sizes:
+        return factors
+    current = dict(sizes)
+    cumulative = {dim: 1 for dim in sizes}
+    while max(current.values()) > min_size:
+        step = {dim: (pyramid_downsample if size >= pyramid_downsample else 1)
+                for dim, size in current.items()}
+        if all(value == 1 for value in step.values()):
+            break
+        current = {dim: ceil(size / step[dim]) for dim, size in current.items()}
+        cumulative = {dim: factor * step[dim] for dim, factor in cumulative.items()}
+        factors.append(dict(cumulative))
+    return factors
+
+
 def build_missing_pyramid_levels(data, dimension_order, pixel_size, pyramid_downsample=2,
                                  min_size=default_chunk_size):
     """A source with only one real resolution (e.g. a plain, non-pyramidal TIFF) leaves napari
@@ -252,25 +282,29 @@ def build_missing_pyramid_levels(data, dimension_order, pixel_size, pyramid_down
     EM tile: dropped get_contrast_limits() (which reads this coarsest level) from ~0.46s back to
     ~0.07s, i.e. down to roughly the cost of the one unavoidable decode.
 
+    How many levels, and how much coarser each is, comes from calc_pyramid_level_factors() -
+    shared with the export side (see there), so a synthesized pyramid and a written one agree.
+
     Returns ([data] + extra levels, [pixel_size] + matching per-level pixel sizes) - a no-op
     (single-level) result for a source with no spatial dims at all.
     """
-    spatial_axes = [axis for axis, dim in enumerate(dimension_order) if dim in 'xyz']
+    spatial_axes = {dim: axis for axis, dim in enumerate(dimension_order) if dim in 'xyz'}
     datas = [data]
     pixel_sizes = [pixel_size]
     if not spatial_axes:
         return datas, pixel_sizes
-    while max(datas[-1].shape[axis] for axis in spatial_axes) > min_size:
-        prev = datas[-1]
-        factors = {axis: (pyramid_downsample if axis in spatial_axes and prev.shape[axis] >= pyramid_downsample else 1)
-                  for axis in range(prev.ndim)}
-        coarse = prev[tuple(slice(None, None, factors[axis]) for axis in range(prev.ndim))]
-        if coarse.shape == prev.shape:
+    sizes = {dim: data.shape[axis] for dim, axis in spatial_axes.items()}
+    for factors in calc_pyramid_level_factors(sizes, pyramid_downsample, min_size):
+        # factors are cumulative against the finest level, so always slice `data` itself rather
+        # than the previous level - one strided view of the already-decoded array either way
+        slicing = tuple(slice(None, None, factors.get(dim, 1))
+                        for dim in dimension_order)
+        coarse = data[slicing]
+        if coarse.shape == datas[-1].shape:
             break
         datas.append(coarse)
-        prev_pixel_size = pixel_sizes[-1]
-        pixel_sizes.append({dim: prev_pixel_size[dim] * prev.shape[axis] / coarse.shape[axis]
-                            for axis, dim in enumerate(dimension_order) if dim in prev_pixel_size})
+        pixel_sizes.append({dim: pixel_size[dim] * data.shape[spatial_axes[dim]] / coarse.shape[spatial_axes[dim]]
+                            for dim in pixel_size if dim in spatial_axes})
     return datas, pixel_sizes
 
 
@@ -414,24 +448,91 @@ def get_msim_level_data(msim):
     return [msim[scale_key].ds['image'].data for scale_key in msi_utils.get_sorted_scale_keys(msim)]
 
 
-def get_chunk_sizes(dtype, spatial_dims, xy_chunk_size=1024, target_bytes=64 * 1024 ** 2):
-    """Per-spatial-dim chunk sizes for a fused preview. x/y (the axes napari always shows in
-    full, for any view) get a fixed, generous tile size; z (the axis napari slices through one
-    plane at a time in 2D view) is instead sized so a single x/y-by-z chunk stays near
-    target_bytes - keeping z chunks small enough that viewing one slice doesn't force
-    computing many slices' worth of fusion. An isotropic split (the same size on every axis,
-    independent of which one is actually sliced through) doesn't know that distinction: if z's
-    real extent happens to be smaller than its even share, the extra budget goes to x/y instead
-    of z, which both fragments x/y for no reason and leaves z as one big, slice-defeating chunk.
+def get_chunk_sizes(dtype, spatial_dims, num_sources=1, num_z_positions=1,
+                    xy_chunk_size=default_chunk_size, target_bytes=64 * 1024 ** 2,
+                    fusion_target_bytes=None, min_xy_chunk_size=64):
+    """Per-spatial-dim chunk sizes for a fused preview, budgeted against what fusing one output
+    chunk actually costs in memory - which is set by how many *sources* land in that chunk, not
+    by the chunk's own size on disk.
+
+    multiview_stitcher's fusion works one output chunk at a time, but for each chunk it
+    transforms every overlapping source into a full-chunk-sized float32 array and np.stack()s
+    them (see fusion._core: field_ims_t, plus a same-shaped blending-weight stack and their
+    product - fusion_stack_arrays of them). Peak memory for one chunk is therefore
+    ~views_in_chunk * chunk_voxels * 4 bytes * fusion_stack_arrays, entirely independent of the
+    output dtype.
+    Sizing chunks by output bytes alone (target_bytes / itemsize) misses that factor completely:
+    for a few thousand sources it lands on chunks whose fusion needs hundreds of GB.
+
+    Two things make coarse pyramid levels the worst case, not the finest:
+
+    - fuse() reuses one output_chunksize for *every* level it builds, so an xy chunk size larger
+      than a coarse level's whole extent collapses that level into a single chunk covering the
+      full field of view - and therefore every source in it. Cost is worst at the level whose
+      extent is about xy_chunk_size (coarser than that the chunk shrinks with the level; finer,
+      the chunk stays fixed while the sources per chunk fall), so bound that level.
+    - when sources are distributed along z (num_z_positions > 1: a stack of 2D sections, each
+      its own set of tiles), a chunk spanning Nz output planes pulls in every source from Nz
+      sections at once. That multiplies views per chunk *and* chunk voxels, so cost grows with
+      the square of the z chunk - one plane per chunk is what keeps a zoomed-out view cheap.
+
+    fusion_target_bytes is the budget for *one* chunk, defaulting to
+    default_fusion_chunk_bytes, which is derived from this job's own CPU and memory allocation:
+    napari (and any dask.compute over a whole level) fuses one chunk per worker concurrently, so
+    process peak is roughly the budget times the worker count. That is what lets the same sizing
+    serve a 64-core/2TB HPC node (which lands on the generous xy_chunk_size, keeping the chunk
+    count - and so the graph-construction cost - low) and a laptop (which trades chunk size for
+    staying inside its own memory) without either being tuned for the other.
+
+    x/y stay as generous as that budget allows (napari always shows both axes in full, so
+    fragmenting them buys nothing, and x/y sizes are rounded down to a multiple of
+    min_xy_chunk_size to keep the chunk grid tidy), and z takes the remainder: with sources
+    spread over z it is driven down to 1, and only for a genuine z-stack (num_z_positions == 1,
+    where a deeper chunk adds voxels but no extra views) does it fall back to filling
+    target_bytes - keeping z chunks small enough that viewing one slice doesn't force computing
+    many slices' worth of fusion. An isotropic split (the same size on every axis, independent
+    of which one is actually sliced through) knows neither distinction.
     """
-    sizes = {dim: xy_chunk_size for dim in spatial_dims if dim in ('x', 'y')}
-    if 'z' in spatial_dims:
-        voxels_per_chunk = target_bytes / np.dtype(dtype).itemsize
-        sizes['z'] = max(1, round(voxels_per_chunk / xy_chunk_size ** 2))
+    # sources that a single output plane can draw from - the per-z-plane tile count when
+    # sources are spread over z, otherwise every source (they all sit at the same height)
+    sources_per_plane = max(1, round(num_sources / max(1, num_z_positions)))
+    # budget expressed in float32 voxels, across the stacked arrays fusion holds at once
+    if fusion_target_bytes is None:
+        fusion_target_bytes = default_fusion_chunk_bytes
+    voxel_budget = max(1.0, fusion_target_bytes / (4 * fusion_stack_arrays))
+
+    def fit_xy(views_per_chunk):
+        # largest x/y chunk whose fusion stays within budget, rounded down to a whole number of
+        # min_xy_chunk_size blocks (never below one such block - a smaller chunk grid than that
+        # costs more in dask tasks and graph build than it saves in peak memory)
+        size = min(xy_chunk_size, np.sqrt(voxel_budget / views_per_chunk))
+        return max(min_xy_chunk_size, int(size // min_xy_chunk_size) * min_xy_chunk_size)
+
+    if 'z' not in spatial_dims:
+        # 2D output: one chunk's cost is sources_per_plane * xy_size ** 2
+        xy_size = fit_xy(sources_per_plane)
+        return {dim: xy_size for dim in spatial_dims if dim in ('x', 'y')}
+
+    xy_size = fit_xy(sources_per_plane)
+    sizes = {dim: xy_size for dim in spatial_dims if dim in ('x', 'y')}
+    if num_z_positions > 1:
+        # a z chunk of Nz sections costs sources_per_plane * Nz ** 2 * xy_size ** 2 voxels (Nz
+        # times the sources, Nz times the voxels) - quadratic in Nz, so once sources sit at
+        # distinct z positions the whole budget goes to x/y and z stays at a single plane
+        sizes['z'] = 1
+    else:
+        # genuine z-stack: extra z depth adds voxels but no extra views, so the output-byte
+        # budget stays the binding constraint, capped by the fusion budget for this many sources.
+        # Floor, not round: rounding up trades a budget overrun for a chunk depth nobody asked
+        # for, and z is the axis a deeper chunk hurts most (napari computes a whole chunk to
+        # show one slice)
+        voxels_per_chunk = min(target_bytes / np.dtype(dtype).itemsize,
+                               voxel_budget / sources_per_plane)
+        sizes['z'] = max(1, int(voxels_per_chunk // xy_size ** 2))
     return sizes
 
 
-def get_contrast_limits(msim, cheap=False):
+def get_contrast_limits(msim, cheap=False, max_tasks=default_contrast_limits_max_tasks):
     """Real min/max contrast range computed from just the coarsest pyramid level, so a caller
     can pass it as add_image()'s contrast_limits without napari falling back to its own default:
     for multiscale layers that already reads the coarsest level (data[-1]), but for anything
@@ -445,13 +546,25 @@ def get_contrast_limits(msim, cheap=False):
     up fast even on just the coarsest level; the user can always auto-contrast a layer from
     napari's own UI once it's up, so getting this exactly right up front isn't worth the cost
     there.
+
+    That naive guess is also the automatic fallback whenever the coarsest level's own graph is
+    larger than max_tasks: "the coarsest level is small" holds for its pixel count, but not
+    necessarily for the work behind it - a level fused from thousands of sources is thousands of
+    transforms however few pixels come out. This step exists to be the fast one before anything
+    is on screen, so past that size it declines to be the thing that blocks first paint.
     """
+    coarsest = get_msim_level_data(msim)[-1]
+    if not cheap:
+        num_tasks = len(coarsest.dask) if hasattr(coarsest, 'dask') else 0
+        if num_tasks > max_tasks:
+            logging.info(f'Contrast limits: using dtype range instead of computing'
+                         f' the coarsest pyramid level ({num_tasks} tasks > {max_tasks})')
+            cheap = True
     if cheap:
-        dtype = get_msim_level_data(msim)[-1].dtype
+        dtype = coarsest.dtype
         if np.issubdtype(dtype, np.integer):
             return [0, np.iinfo(dtype).max]
         return [0.0, 1.0]
-    coarsest = get_msim_level_data(msim)[-1]
     min_val, max_val = dask.compute(coarsest.min(), coarsest.max())
     min_val, max_val = float(min_val), float(max_val)
     if min_val == max_val:
@@ -1997,17 +2110,34 @@ def extract_sims_from_msims(msims, sources, transform_key, target_scale):
     return sims
 
 
-def select_msim_subpyramid_at_scale(msims, sources, target_scale):
+def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn_factor=2):
     """Select, per source, every native pyramid level from the nearest match to `target_scale`
     down to the coarsest, as a genuine (smaller) sub-pyramid msim - pure msim slicing, no sim
     extraction and no resize to an exact match.
+
+    A source whose pyramid does not reach `target_scale` silently yields the finest level it
+    does have, and everything downstream then fuses (and holds in memory) that much more than
+    was asked for: the residual factor multiplies the output's linear size, so falling short by
+    8x is 64x the pixels per plane to fuse. That is invisible in the result - it just looks
+    slow - so log it once, with the shortfall, whenever it exceeds shortfall_warn_factor.
     """
     result = []
+    residuals = []
     for source, msim in zip(sources, msims):
-        level, _, _ = get_level_from_scale(source, target_scale)
+        level, residual, _ = get_level_from_scale(source, target_scale)
+        residuals.append(max(residual.values()) if residual else 1)
         scale_keys = msi_utils.get_sorted_scale_keys(msim)[level:]
         result.append(DataTree.from_dict({f'scale{i}': msim[scale_key].ds
                                           for i, scale_key in enumerate(scale_keys)}))
+    worst = max(residuals) if residuals else 1
+    if worst >= shortfall_warn_factor:
+        short = sum(1 for residual in residuals if residual >= shortfall_warn_factor)
+        logging.warning(
+            f'Preview scale {target_scale} not reachable for {short}/{len(residuals)} sources:'
+            f' coarsest available level is up to {worst:.3g}x finer than requested, so the'
+            f' preview fuses up to {worst ** 2:.3g}x more pixels per plane than intended.'
+            f' Sources lacking coarse pyramid levels (e.g. a single-resolution OME-Zarr) are the'
+            f' usual cause - re-converting them with a full pyramid restores the intended cost.')
     return result
 
 

@@ -7,7 +7,7 @@ import zarr
 from muvis_align.image.color_conversion import rgba_to_hexrgb
 from muvis_align.util import create_chunk_dict
 from muvis_align.constants import default_ome_zarr_version, default_chunk_size
-from muvis_align.image.util import create_compression_filter
+from muvis_align.image.util import calc_pyramid_level_factors, create_compression_filter
 from muvis_align.image.ome_zarr_util import get_channel_window
 
 
@@ -73,21 +73,42 @@ def save_ome_image(data, path, dim_order, pixel_size, channels, translation, rot
     return multiscales.metadata
 
 
+def get_padding_scale_factors(shape, dim_order, **kwargs):
+    """Cumulative per-level downsample factors needed to extend a pyramid whose coarsest level
+    is `shape` down to one small enough to draw a zoomed-out overview from - calc_pyramid_level_
+    factors()' rule, the same one build_missing_pyramid_levels() applies when synthesizing those
+    levels on the reader side. Writing them means a store carries the levels a reader would
+    otherwise have to invent - and, for a chunked store, could not invent cheaply: strided
+    subsampling of a zarr array still reads every chunk it touches, unlike the already-decoded
+    single page of a non-pyramidal TIFF.
+
+    Already in ngff_zarr's own form: one dict per extra level, giving that level's factor
+    relative to the input, cumulative rather than per-step.
+    """
+    return calc_pyramid_level_factors(
+        {dim: size for dim, size in zip(dim_order, shape) if dim in 'xyz'}, **kwargs)
+
+
 def save_ome_multiscale_levels(path, levels, dim_order, channels, translation,
                                min_length=128, compression=None, ome_version=default_ome_zarr_version):
     """Write pre-built pyramid levels (e.g. a source's own native resolutions) exactly as
     given - no resampling - unlike save_ome_image()/to_multiscales(), which always derives
     every level but the first from one input via resampling.
 
-    Pads with additional coarser levels beyond the smallest given one only if ngff_zarr's own
-    optimal-level-count logic says there's room for more: to_multiscales(scale_factors=<int>)
-    (an int, rather than an explicit per-level list) delegates to its private
-    _ngff_image_scale_factors(), which keeps halving while there's still at least min_length
-    pixels' worth of data left *and* every spatial dim still exceeds twice the chunk size -
-    the same chunk-size/pixel-count-based stopping criterion save_ome_image() already relies on
-    for a regular (fully resampled) export, reused here rather than a bespoke one. Those extra
-    levels are genuinely resampled (via ngff_zarr's own default downsampling method) since
-    nothing at that resolution exists in the source to preserve.
+    Pads with additional coarser levels beyond the smallest given one, down to the same
+    "small enough to draw a zoomed-out overview from" threshold the reader side uses
+    (build_missing_pyramid_levels' min_size, i.e. default_chunk_size). Those extra levels are
+    genuinely resampled (via ngff_zarr's own default downsampling method) since nothing at that
+    resolution exists in the source to preserve.
+
+    The per-level factors are computed here rather than delegated to to_multiscales(
+    scale_factors=<int>): that int form calls ngff_zarr's private _ngff_image_scale_factors(),
+    which stops as soon as every spatial dim is below *twice* the chunk size and never emits a
+    level smaller than one chunk. For a 1024 chunk that leaves the coarsest written level at
+    >=1024px, a level coarser than which the reader would have synthesized for itself from a
+    non-pyramidal source - so a converted OME-Zarr ended up with a coarser-level gap exactly
+    where a zoomed-out preview needs one, and reading it back selected a much finer level than
+    the requested preview scale (fusing, and holding in memory, far more than asked for).
 
     levels: list of (data, pixel_size) pairs, finest first - data can be numpy or dask.
     """
@@ -117,9 +138,12 @@ def save_ome_multiscale_levels(path, levels, dim_order, channels, translation,
     smallest_data, smallest_pixel_size = levels[-1]
     smallest_ngff_image = to_ngff_image(smallest_data, dims=dim_order, scale=smallest_pixel_size,
                                         translation=translation, axes_units=axes_units)
-    extra_multiscales = to_multiscales(smallest_ngff_image, scale_factors=min_length, chunks=chunks)
-    images += extra_multiscales.images[1:]
-    datasets += extra_multiscales.metadata.datasets[1:]
+    extra_scale_factors = get_padding_scale_factors(smallest_data.shape, dim_order)
+    if extra_scale_factors:
+        extra_multiscales = to_multiscales(smallest_ngff_image, scale_factors=extra_scale_factors,
+                                           chunks=chunks)
+        images += extra_multiscales.images[1:]
+        datasets += extra_multiscales.metadata.datasets[1:]
 
     # renumber every dataset path sequentially - each was independently built starting from
     # 'scale0/image', so native and padding levels alike would otherwise collide/repeat

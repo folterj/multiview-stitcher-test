@@ -1419,7 +1419,8 @@ class MVSRegistration:
             z_scale = extract_z_scale(self.positions, self.scales)
 
         z_positions = [position.get('z') for position in self.positions if 'z' in position]
-        if len(set(z_positions)) > 1:
+        num_z_positions = len(set(z_positions))
+        if num_z_positions > 1:
             msims = make_msims_3d(msims, z_scale=z_scale, positions=self.positions)
 
         output_stack_properties = calc_output_properties(msims, transform_key,
@@ -1430,6 +1431,23 @@ class MVSRegistration:
         data_size = np.prod(list(output_stack_properties['shape'].values())) * sim0.dtype.itemsize
         logging.info(f'Fusing {print_hbytes(data_size)}')
 
+        # Peak memory while fusing is set by how many sources land in one output chunk, not by
+        # the output's own size: fusion transforms every source overlapping a chunk into a
+        # full-chunk-sized float32 array and stacks them. Left unspecified, fusion.fuse() falls
+        # back to the input's own on-disk chunk grid, which for a coarse output (a preview, or
+        # any coarse pyramid level - fuse() reuses one chunk size for every level it builds)
+        # means chunks spanning the entire field of view, and therefore every source at once.
+        # get_chunk_sizes() sizes them against that real cost instead - see its docstring.
+        # A caller-supplied output_chunksize always wins (the interactive preview computes its
+        # own; the zarr export path below derives one from the configured tile_size, which is
+        # on-disk layout the user asked for and must not be second-guessed here).
+        default_output_chunksize = get_chunk_sizes(sim0.dtype, list(output_stack_properties['shape']),
+                                                   num_sources=len(msims),
+                                                   num_z_positions=num_z_positions)
+        if self.verbose:
+            logging.info(f'Fusion output_chunksize: {numpy_to_native(output_chunksize or default_output_chunksize)}'
+                         f' ({len(msims)} sources over {max(1, num_z_positions)} z position(s))')
+
         saving_zarr = False
         if is_channel_overlay:
             # convert to multichannel images - one channel per source, still a real multiscale
@@ -1439,7 +1457,10 @@ class MVSRegistration:
                     [msim],
                     transform_key=transform_key,
                     output_stack_properties=output_stack_properties,
-                    output_chunksize=output_chunksize
+                    # one source per fuse() call here, so the per-chunk source count this
+                    # defaults against is 1 - recompute rather than reuse the all-sources value
+                    output_chunksize=output_chunksize or get_chunk_sizes(
+                        sim0.dtype, list(output_stack_properties['shape']))
                 )
 
             # each fuse() call here only builds one source's own (lazy) dask graph against the
@@ -1473,6 +1494,13 @@ class MVSRegistration:
                     output_chunksize = xyz_to_dict(tile_size)
                     if 'z' in output_stack_properties['shape'] and 'z' not in output_chunksize:
                         # zarr export streams one z-slice at a time to keep peak memory low
+                        output_chunksize['z'] = 1
+                if output_chunksize is None:
+                    # no caller value and (for zarr) no configured tile_size to derive one from
+                    # - fall back to the memory-budgeted default, still streaming one z-slice at
+                    # a time for a zarr export, as above
+                    output_chunksize = dict(default_output_chunksize)
+                    if saving_zarr and 'z' in output_chunksize:
                         output_chunksize['z'] = 1
                 if saving_zarr:
                     if not output_filename.lower().endswith('.zarr'):

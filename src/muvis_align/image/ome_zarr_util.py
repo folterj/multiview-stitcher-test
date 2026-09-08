@@ -1,4 +1,8 @@
+import json
+import os
+
 import numpy as np
+from multiview_stitcher import spatial_image_utils as si_utils
 
 from muvis_align.image.color_conversion import *
 from muvis_align.image.util import get_image_quantile
@@ -146,3 +150,159 @@ def scale_dimensions_dict(shape0, scale):
             shape1 = int(shape1 * scale)
         shape[dimension] = shape1
     return shape
+
+
+def ngff_dims_to_sim_dims(file_dims):
+    """The dims a sim built from `file_dims` ends up with: si_utils.SPATIAL_IMAGE_DIMS order,
+    keeping whichever spatial dims the file has and always including 't' and 'c' - which
+    si_utils.get_sim_from_array forces to exist at size 1 when the file has none (the same
+    multiview_stitcher convention util.ensure_spatial_image_dims matches). Reproducing the rule
+    here is what lets source metadata be read without building the msim (a DataTree of one sim
+    per level) just to ask it for its own shapes.
+    """
+    return [dim for dim in si_utils.SPATIAL_IMAGE_DIMS
+            if dim in sim_forced_dims or dim in file_dims]
+
+
+sim_forced_dims = ('t', 'c')
+sim_spatial_dims = tuple(dim for dim in si_utils.SPATIAL_IMAGE_DIMS if dim not in sim_forced_dims)
+
+
+def read_ome_zarr_source_metadata(path):
+    """Every piece of metadata an ImageSource needs from an OME-Zarr - per-level shapes and
+    pixel sizes, dtype, origin, channel count, omero - *without* constructing a msim.
+
+    Building the msim eagerly (read_msim_from_ome_zarr) costs one zarr.json read per pyramid
+    level plus a full xarray DataTree of one sim per level, measured at ~100ms per source: for
+    a few thousand sources that is minutes of project load spent on data nothing has asked for
+    yet. A v0.5/zarr-v3 store already carries every level's shape and dtype in its consolidated
+    root zarr.json, so the whole thing is one read (~1ms); ngff_zarr does not use that
+    consolidated metadata (it hands the *store*, not the opened group, to its own
+    Metadata._from_zarr_attrs, which reopens each level by path), hence reading it directly.
+
+    Falls back to ngff_zarr's own (version-aware) metadata parse for anything the fast path
+    cannot fully account for - a non-consolidated store, v0.4, a remote URL, or any coordinate
+    transformation beyond the plain per-dataset scale/translation pair. That fallback still
+    skips the DataTree construction, so it is cheaper than building the msim either way.
+
+    Returns a dict of dimension_order, shapes, dtype, pixel_sizes, position, nchannels and
+    omero - all already expressed in the forced t/c sim dimension order (see above), so a
+    caller can assign them straight onto an ImageSource.
+    """
+    metadata = _read_consolidated_ome_zarr_metadata(path)
+    if metadata is None:
+        metadata = _read_ngff_ome_zarr_metadata(path)
+    return metadata
+
+
+def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, omero):
+    """Shared tail of both read paths: map per-level file dims/shapes/scales onto the forced
+    t/c sim dimension order. scales is one dict per level (keyed by file dim), translation one
+    dict for the finest level; either may omit dims (defaulting to 1.0 / 0.0).
+    """
+    sim_dims = ngff_dims_to_sim_dims(file_dims)
+    spatial_dims = [dim for dim in sim_dims if dim in sim_spatial_dims]
+    shapes = []
+    for shape in file_shapes:
+        sizes = dict(zip(file_dims, shape))
+        shapes.append(tuple(sizes.get(dim, 1) for dim in sim_dims))
+    pixel_sizes = [{dim: float(scale.get(dim, 1.0)) for dim in spatial_dims} for scale in scales]
+    position = {dim: float(translation.get(dim, 0.0)) for dim in spatial_dims}
+    nchannels = dict(zip(sim_dims, shapes[0])).get('c', 1)
+    return {'dimension_order': ''.join(sim_dims), 'shapes': shapes, 'dtype': np.dtype(dtype),
+            'pixel_sizes': pixel_sizes, 'position': position, 'nchannels': int(nchannels),
+            'omero': omero}
+
+
+def _read_consolidated_ome_zarr_metadata(path):
+    """Fast path: parse the consolidated root zarr.json directly. Returns None (rather than
+    raising or guessing) for anything it cannot fully account for, leaving the caller to fall
+    back to ngff_zarr's own parse - the point of this path is to be exactly equivalent wherever
+    it applies, never to be approximately right more often.
+    """
+    root_file = os.path.join(str(path), 'zarr.json')
+    if not os.path.isfile(root_file):
+        return None
+    try:
+        with open(root_file) as file:
+            root = json.load(file)
+    except (OSError, ValueError):
+        return None
+    if root.get('zarr_format') != 3:
+        return None
+    nodes = root.get('consolidated_metadata', {}).get('metadata')
+    if not nodes:
+        return None
+    multiscales = root.get('attributes', {}).get('ome', {}).get('multiscales')
+    if not multiscales:
+        return None
+    multiscale = multiscales[0]
+    # a multiscales-level transform composes with the per-dataset ones - not handled here
+    if multiscale.get('coordinateTransformations'):
+        return None
+    file_dims = tuple(axis['name'] for axis in multiscale.get('axes', []))
+    known_dims = si_utils.SPATIAL_IMAGE_DIMS
+    if not file_dims or any(dim not in known_dims for dim in file_dims):
+        return None
+
+    file_shapes, scales, dtypes = [], [], set()
+    translation = {}
+    for index, dataset in enumerate(multiscale.get('datasets', [])):
+        node = nodes.get(dataset.get('path'))
+        if not node or node.get('node_type') != 'array':
+            return None
+        transforms = dataset.get('coordinateTransformations', [])
+        if any(transform.get('type') not in ('scale', 'translation') for transform in transforms):
+            return None
+        scale_values = next((transform['scale'] for transform in transforms
+                             if transform.get('type') == 'scale'), None)
+        shape = node.get('shape')
+        if scale_values is None or len(scale_values) != len(file_dims):
+            return None
+        if shape is None or len(shape) != len(file_dims):
+            return None
+        file_shapes.append(tuple(shape))
+        scales.append(dict(zip(file_dims, scale_values)))
+        dtypes.add(node.get('data_type'))
+        if index == 0:
+            translation_values = next((transform['translation'] for transform in transforms
+                                       if transform.get('type') == 'translation'), None)
+            if translation_values is not None:
+                if len(translation_values) != len(file_dims):
+                    return None
+                translation = dict(zip(file_dims, translation_values))
+    if not file_shapes or len(dtypes) != 1:
+        return None
+    try:
+        dtype = np.dtype(dtypes.pop())
+    except TypeError:
+        return None
+
+    ome = root.get('attributes', {}).get('ome', {})
+    return _build_source_metadata(file_dims, file_shapes, dtype, scales, translation,
+                                  ome.get('omero'))
+
+
+def _read_ngff_ome_zarr_metadata(path):
+    """Fallback: ngff_zarr's own version-aware parse (v0.4, non-consolidated, remote stores),
+    still without building the msim - only .dims/.data.shape/.scale/.translation are read off
+    each level's NgffImage, no sim or DataTree is constructed.
+    """
+    # imported here rather than at module scope: multiview_stitcher.ngff_utils pulls in a large
+    # dependency chain that the fast path above never needs
+    from multiview_stitcher import ngff_utils
+
+    multiscales = ngff_utils.read_ngff_multiscales(path)
+    images = multiscales.images
+    file_dims = tuple(images[0].dims)
+    omero = getattr(multiscales.metadata, 'omero', None)
+    if omero is not None and not isinstance(omero, dict):
+        dump = getattr(omero, 'model_dump', None)
+        omero = dump() if dump is not None else None
+    return _build_source_metadata(
+        file_dims,
+        [tuple(image.data.shape) for image in images],
+        images[0].data.dtype,
+        [dict(image.scale) for image in images],
+        dict(images[0].translation),
+        omero)
