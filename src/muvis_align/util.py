@@ -400,6 +400,28 @@ def check_contains_value(value, contains_value):
     return isinstance(value, (dict, str)) and contains_value in value
 
 
+def get_metadata_z_scale(metadata):
+    """The configured z spacing from a source/extra metadata dict, as a number - or None when it
+    is unset, blank, or delegated to the file itself ('source').
+
+    Every consumer of z_scale treats it as a number (fusion output spacing, the z step used to
+    promote 2D sources into a 3D stack), while the configuration it comes from is free-form text
+    a user types: 'source' means "whatever the file reports", which ImageSource.fix_metadata has
+    already applied per source. Reading the raw dict value handed that literal string straight to
+    numpy - e.g. `source_scale_z: source` (any OME-Zarr project using file metadata) failed in
+    fusion with "could not convert string to float: 'source'".
+    """
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get('scale', {}).get('z')
+    if value is None or check_contains_value(value, 'source'):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def eval_context(data, key, default_value, context):
     value = data.get(key, default_value)
     if isinstance(value, str):

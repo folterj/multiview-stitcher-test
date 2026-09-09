@@ -2204,7 +2204,12 @@ def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn
     residuals = []
     for source, msim in zip(sources, msims):
         level, residual, _ = get_level_from_scale(source, target_scale)
-        residuals.append(max(residual.values()) if residual else 1)
+        # xy only: no pyramid downsamples z (every level keeps the same z extent), so a source
+        # with a 'z' pixel size always carries a residual equal to the full target factor there.
+        # Counting it made every OME-Zarr source (which always has a 'z', at size 1 for a 2D
+        # image) report the maximum possible shortfall, however complete its xy pyramid was.
+        xy_residual = [value for dim, value in residual.items() if dim in 'xy']
+        residuals.append(max(xy_residual) if xy_residual else 1)
         scale_keys = msi_utils.get_sorted_scale_keys(msim)[level:]
         result.append(DataTree.from_dict({f'scale{i}': msim[scale_key].ds
                                           for i, scale_key in enumerate(scale_keys)}))
