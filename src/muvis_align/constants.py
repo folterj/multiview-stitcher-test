@@ -2,6 +2,8 @@ import os
 
 import zarr
 
+from muvis_align.zarr_compat import apply_windows_atomic_write_retry
+
 zarr_extension = '.ome.zarr'
 tiff_extension = '.ome.tiff'
 
@@ -112,6 +114,11 @@ default_source_init_workers = min(64, _available_cpus * 8)
 # OME-TIFF ones (tifffile's own reads don't go through this at all). Set once, globally, here
 # (not inside a `with` block) so it applies for the life of the process.
 zarr.config.set({'threading.max_workers': default_source_init_workers})
+# Windows only: zarr renames each metadata document into place, which fails outright if anything
+# holds the destination open for the instant that takes. Applied here alongside the config above,
+# for the same reason - it has to be in effect for the life of the process, before any store is
+# written. See zarr_compat for what was measured.
+apply_windows_atomic_write_retry()
 # per-source preview/fusion prep (building each source's own fuse graph, gathering contrast
 # limits/metadata) is genuine CPU-bound work, not I/O wait - unlike default_source_init_workers
 # above there's no file-handle concern capping it, so this uses every allocated core
