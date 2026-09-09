@@ -2189,7 +2189,7 @@ def extract_sims_from_msims(msims, sources, transform_key, target_scale):
     return sims
 
 
-def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn_factor=2):
+def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn_factor=4):
     """Select, per source, every native pyramid level from the nearest match to `target_scale`
     down to the coarsest, as a genuine (smaller) sub-pyramid msim - pure msim slicing, no sim
     extraction and no resize to an exact match.
@@ -2199,12 +2199,19 @@ def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn
     was asked for: the residual factor multiplies the output's linear size, so falling short by
     8x is 64x the pixels per plane to fuse. That is invisible in the result - it just looks
     slow - so log it once, with the shortfall, whenever it exceeds shortfall_warn_factor.
+
+    The shortfall is measured only over dims the source could actually have downsampled. A
+    size-1 dim (the 'z' every OME-Zarr tile carries, say) is identical at every level, so its
+    residual is always the whole requested factor - counting it would report a 16x shortfall for
+    a perfectly good pyramid whose x/y reach 8 of the 16 asked for.
     """
     result = []
     residuals = []
     for source, msim in zip(sources, msims):
         level, residual, _ = get_level_from_scale(source, target_scale)
-        residuals.append(max(residual.values()) if residual else 1)
+        sizes = dict(zip(source.dimension_order, source.get_shape(0)))
+        reducible = [value for dim, value in residual.items() if sizes.get(dim, 1) > 1]
+        residuals.append(max(reducible) if reducible else 1)
         scale_keys = msi_utils.get_sorted_scale_keys(msim)[level:]
         result.append(DataTree.from_dict({f'scale{i}': msim[scale_key].ds
                                           for i, scale_key in enumerate(scale_keys)}))

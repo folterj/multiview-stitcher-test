@@ -92,23 +92,61 @@ class MVSRegistration:
             if progress_factory is not None
             else nullcontext(None)
         )
+        # Most of a source's msim build is opening its file and turning what it finds into an
+        # xarray DataTree - for OME-Zarr, ~33ms of ~43ms per source. That is the same per-file
+        # read init_sources() spreads across default_source_init_workers (and where, on network
+        # storage, it overlaps almost perfectly: a 4733-source run showed 276s of summed
+        # per-file time in 5.5s of wall time). Sources deliberately defer that read until
+        # something actually wants pixel-shaped data, which is here - so this has to do the
+        # overlapping init_sources() would otherwise have done, or the deferral just moves an
+        # I/O-bound phase into a serial one.
+        #
+        # Threads, not processes: the work is a file read plus xarray construction, and each
+        # source's caches (_msim, _redimensioned_msims) belong to that source alone, so no two
+        # workers touch the same state. On a local SSD the read is already warm and the xarray
+        # half dominates, so this is roughly neutral there (measured 0.9-1.0x); the win is on
+        # the storage where the read actually costs something.
         source_times = []
         phase_start = time.time()
+        nsources = len(self.sources)
+        msims = [None] * nsources
+        max_workers = 1
+
+        def build_msim(index):
+            source_start = time.time()
+            msim = build_source_msim(self.sources[index], self._msim_output_order,
+                                     self.positions[index], self._msim_transforms[index],
+                                     self.source_transform_key, z_scale=self._msim_z_scale)
+            # list.append is atomic under the GIL, so plain appends from worker threads are safe
+            source_times.append(time.time() - source_start)
+            return msim
+
         with progress_context as pbar:
-            msims = []
-            for source, translation, transform in zip(self.sources, self.positions, self._msim_transforms):
-                source_start = time.time()
-                msims.append(build_source_msim(source, self._msim_output_order, translation, transform,
-                                               self.source_transform_key, z_scale=self._msim_z_scale))
-                source_times.append(time.time() - source_start)
+            if nsources > 1:
+                max_workers = min(default_source_init_workers, nsources)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(build_msim, index): index
+                              for index in range(nsources)}
+                    for future in as_completed(futures):
+                        # results collected by index, so msims stays in source order however the
+                        # futures happen to complete
+                        msims[futures[future]] = future.result()
+                        if pbar is not None:
+                            pbar.update(1)
+            elif nsources:
+                msims[0] = build_msim(0)
                 if pbar is not None:
                     pbar.update(1)
         self._msims = msims
         if self.logging_time and source_times:
-            # sequential (unlike init_sources()'s threaded file reads) - wall time is just the
-            # sum below, but mean/max still show per-source cost and outliers
-            logging.info(f'Build msims: {len(source_times)} sources, wall {time.time() - phase_start:.1f}s '
-                        f'(mean {1000 * sum(source_times) / len(source_times):.0f}ms, max {1000 * max(source_times):.0f}ms)')
+            # as in init_sources(): wall time close to the summed per-source time means GIL-bound
+            # xarray work that more threads won't fix, well below it means the file reads are
+            # being usefully overlapped
+            logging.info(f'Build msims: {len(source_times)} sources with {max_workers} workers, '
+                        f'wall {time.time() - phase_start:.1f}s, '
+                        f'per-source total {sum(source_times):.1f}s '
+                        f'(mean {1000 * sum(source_times) / len(source_times):.0f}ms, '
+                        f'max {1000 * max(source_times):.0f}ms)')
 
     def reset(self):
         self.state = RegState.UNINIT

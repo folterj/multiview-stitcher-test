@@ -344,3 +344,47 @@ def test_register_overlap_reuses_cached_overlap_across_param_changes():
     assert transform1.shape == transform2.shape
     assert not np.isnan(quality1)
     assert not np.isnan(quality2)
+
+
+def test_build_msims_is_parallel_but_keeps_source_order():
+    """_build_msims does the per-file reading that sources defer out of init, so it runs
+    threaded (as init_sources does). Futures complete in whatever order they finish, so the
+    result must still be indexed back into source order - a shuffle here would silently pair
+    every msim with the wrong position/transform.
+    """
+    from pathlib import Path
+
+    from multiview_stitcher import spatial_image_utils as si_utils
+
+    from muvis_align.MVSRegistration import MVSRegistration
+    from muvis_align.image.source_helper import create_image_source
+    from muvis_align.image.util import build_source_msim, get_msim_image0
+
+    data_dir = Path(__file__).resolve().parent.parent / 'data' / 'S000'
+    files = sorted(str(path) for path in data_dir.glob('*.tiff'))
+    assert len(files) > 1, 'need several sources to exercise the thread pool'
+
+    reg = MVSRegistration()
+    reg.sources = [create_image_source(name) for name in files]
+    # distinct positions, so a mis-paired msim is detectable from its origin alone
+    reg.positions = [{'x': 100.0 * index, 'y': 10.0 * index} for index in range(len(files))]
+    reg._msim_transforms = [None] * len(files)
+    reg._msim_output_order = 'tcyx'
+    reg._msim_z_scale = None
+    reg.source_transform_key = 'source_metadata'
+    reg.logging_time = False
+
+    reg._build_msims()
+    built = reg._msims
+
+    assert len(built) == len(files)
+    assert all(msim is not None for msim in built)
+
+    expected = [build_source_msim(create_image_source(name), 'tcyx', position, None,
+                                  'source_metadata')
+                for name, position in zip(files, reg.positions)]
+    for got, want in zip(built, expected):
+        got_origin = si_utils.get_origin_from_sim(get_msim_image0(got))
+        want_origin = si_utils.get_origin_from_sim(get_msim_image0(want))
+        assert got_origin == pytest.approx(want_origin)
+        assert get_msim_image0(got).shape == get_msim_image0(want).shape

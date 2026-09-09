@@ -150,6 +150,8 @@ def test_preview_scale_shortfall_is_logged(caplog):
         msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
         source = SimpleNamespace(
             scale_factors=[{'y': float(f), 'x': float(f)} for f in levels],
+            dimension_order='yx',
+            get_shape=lambda level=0: (64, 64),
             get_pixel_size=lambda: {'y': 1.0, 'x': 1.0})
         return source, msim
 
@@ -163,6 +165,41 @@ def test_preview_scale_shortfall_is_logged(caplog):
     # a pyramid that does reach it logs nothing
     caplog.clear()
     source, msim = make([1, 2, 4, 8, 16])
+    with caplog.at_level(logging.WARNING):
+        select_msim_subpyramid_at_scale([msim], [source], 16)
+    assert 'not reachable' not in caplog.text
+
+    # falling one level short (8 of 16) is not worth crying about
+    caplog.clear()
+    source, msim = make([1, 2, 4, 8])
+    with caplog.at_level(logging.WARNING):
+        select_msim_subpyramid_at_scale([msim], [source], 16)
+    assert 'not reachable' not in caplog.text
+
+
+def test_a_size_1_dim_is_not_mistaken_for_a_pyramid_shortfall(caplog):
+    """A size-1 dim is identical at every level, so its residual is always the full requested
+    factor - counting it reported a 16x shortfall for the perfectly good 4-level pyramids every
+    converted OME-Zarr tile has (they carry a size-1 'z')."""
+    import logging
+    from types import SimpleNamespace
+
+    from multiview_stitcher import msi_utils, spatial_image_utils as si_utils
+
+    from muvis_align.image.util import select_msim_subpyramid_at_scale
+
+    sim = si_utils.get_sim_from_array(np.zeros((1, 64, 64), dtype=np.uint16), dims=['z', 'y', 'x'],
+                                      scale={'z': 1.0, 'y': 1.0, 'x': 1.0},
+                                      translation={'z': 0.0, 'y': 0.0, 'x': 0.0},
+                                      transform_key='affine_metadata')
+    msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
+    source = SimpleNamespace(
+        # x/y really do reach 8x; z cannot be reduced at all
+        scale_factors=[{'z': 1.0, 'y': float(f), 'x': float(f)} for f in (1, 2, 4, 8)],
+        dimension_order='zyx',
+        get_shape=lambda level=0: (1, 64, 64),
+        get_pixel_size=lambda: {'z': 1.0, 'y': 1.0, 'x': 1.0})
+
     with caplog.at_level(logging.WARNING):
         select_msim_subpyramid_at_scale([msim], [source], 16)
     assert 'not reachable' not in caplog.text
