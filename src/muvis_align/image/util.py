@@ -2107,23 +2107,58 @@ def widen_xaffine_to_3d(transform):
     """A 2D affine widened into 3D, its own block embedded in a 3D identity - returned unchanged
     if it is already 3D. Shared by promote_sim_to_3d() and build_source_stack_props(), so a
     promoted sim and the stack properties derived without one carry the same transform.
+
+    Placed by index into a plain numpy identity rather than by label into an xarray one: the
+    label-based .loc assignment this replaces goes through xarray's alignment machinery, which
+    cost 3.3ms per call - and make_msims_3d() makes one call per pyramid level of every source,
+    so it was the larger half of promoting a 2D stack. The index mapping is derived from the
+    same coordinate labels .loc matched on, so the result is identical (asserted by test).
     """
     if 4 in transform.shape:
         return transform
-    transform_3d = param_utils.identity_transform(ndim=3)
     if 't' in transform.dims:
         transform = transform.sel(t=0)
-    transform_3d.loc[{dim: transform.coords[dim] for dim in transform.dims}] = transform
-    return transform_3d
+    labels_3d = ['z', 'y', 'x', '1']
+    axes = [labels_3d.index(str(label)) for label in transform.coords['x_in'].values]
+    widened = np.eye(len(labels_3d))
+    widened[np.ix_(axes, axes)] = np.asarray(transform)
+    return param_utils.affine_to_xaffine(widened)
+
+
+def msim_is_already_3d(msim):
+    """True when every level of `msim` already has a 'z' dim and a 3D transform - i.e. promoting
+    it would produce exactly what is already there.
+
+    A msim reaches make_msims_3d() more than once on the ordinary preview path: the viewer
+    promotes each source's msim, takes a preview sub-pyramid from the result, and hands that to
+    fuse(), which promotes again because the sources still sit at several z positions. The
+    second pass rebuilds every level of every source to arrive back at the same geometry.
+    """
+    for scale_key in msi_utils.get_sorted_scale_keys(msim):
+        dataset = msim[scale_key].ds
+        if 'z' not in dataset['image'].dims:
+            return False
+        # each transform is its own data variable alongside 'image' (e.g. 'affine_metadata',
+        # 3x3 while the sim is 2D, 4x4 once widened) - the same test widen_xaffine_to_3d applies
+        transforms = [name for name in dataset.data_vars if name != 'image']
+        if not transforms:
+            return False
+        if any(4 not in dataset[name].shape for name in transforms):
+            return False
+    return True
 
 
 def make_msims_3d(msims, z_scale=None, positions=None):
     # msim-native equivalent of make_sims_3d: same promote_sim_to_3d() logic, applied
-    # independently to every pyramid level via map_msim_levels
+    # independently to every pyramid level via map_msim_levels - skipping any msim already in
+    # that form, since rebuilding it would only reproduce it (see msim_is_already_3d)
     if not z_scale:
         z_scale = 1
     new_msims = []
     for index, msim in enumerate(msims):
+        if msim_is_already_3d(msim):
+            new_msims.append(msim)
+            continue
         z_position = positions[index].get('z', index * z_scale) if positions else index * z_scale
         new_msims.append(map_msim_levels(
             msim, lambda sim, scale_key, z_position=z_position: promote_sim_to_3d(sim, z_position)))
