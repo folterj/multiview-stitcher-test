@@ -82,9 +82,7 @@ def test_an_already_pyramidal_source_synthesizes_nothing(tmp_path):
     assert len(source.data) == 2
 
 
-def test_zarr_never_synthesizes_levels(tmp_path):
-    """Strided subsampling of a chunked store reads every chunk it touches, so a synthesized
-    level would cost the same as the full one - the reason this is TIFF-only."""
+def test_zarr_with_its_own_pyramid_synthesizes_nothing(tmp_path):
     from muvis_align.image.ome_zarr_helper import save_ome_multiscale_levels
 
     path = str(tmp_path / 'store.ome.zarr')
@@ -95,7 +93,41 @@ def test_zarr_never_synthesizes_levels(tmp_path):
     assert source._synthesized_level_factors() == []
     # its coarse levels come from the file itself (written by the export side's shared rule)
     assert len(source.shapes) > 1
-    assert source.data == []
+    assert len(source.data) == len(source.shapes)
+
+
+def test_single_resolution_zarr_synthesizes_levels(tmp_path):
+    """A store with no pyramid of its own gets one synthesized, exactly as a flat TIFF does.
+
+    Unlike a decoded TIFF page this is not free - strided subsampling of a chunked store re-reads
+    every chunk it touches - but without it nothing downstream can reduce resolution at all, so a
+    coarse preview ends up fusing at the store's native resolution: 64x the output pixels for an
+    8x preview.
+    """
+    import zarr
+
+    path = str(tmp_path / 'flat.ome.zarr')
+    root = zarr.open_group(path, mode='w', zarr_format=3)
+    root.create_array('scale0/image', shape=(4096, 3072), chunks=(512, 512), dtype='uint16')
+    root.attrs['ome'] = {
+        'version': '0.5',
+        'multiscales': [{
+            'axes': [{'name': 'y', 'type': 'space', 'unit': 'micrometer'},
+                     {'name': 'x', 'type': 'space', 'unit': 'micrometer'}],
+            'datasets': [{'path': 'scale0/image', 'coordinateTransformations': [
+                {'type': 'scale', 'scale': [1.0, 1.0]},
+                {'type': 'translation', 'translation': [0.0, 0.0]}]}],
+        }],
+    }
+    zarr.consolidate_metadata(root.store)
+
+    source = create_image_source(path)
+
+    # the store itself has exactly one dataset - every further level here is synthesized
+    assert len(source.shapes) > 1
+    assert [tuple(data.shape) for data in source.data] == [tuple(shape) for shape in source.shapes]
+    # coarse enough to draw a zoomed-out overview from, per the shared rule
+    assert max(source.get_shape(len(source.shapes) - 1)) <= max(source.get_shape(0)) // 2
 
 
 # --- the shared rule itself ---

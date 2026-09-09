@@ -2209,8 +2209,13 @@ def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn
     residuals = []
     for source, msim in zip(sources, msims):
         level, residual, _ = get_level_from_scale(source, target_scale)
-        sizes = dict(zip(source.dimension_order, source.get_shape(0)))
-        reducible = [value for dim, value in residual.items() if sizes.get(dim, 1) > 1]
+        # only dims this source's own pyramid actually reduces: a dim whose coarsest level is
+        # no smaller than its finest (a size-1 'z', or a z-stack whose levels only downsample
+        # x/y) keeps the full target factor as its residual however complete the pyramid is, and
+        # counting it made every OME-Zarr source - which always carries a 'z' - report the
+        # maximum possible shortfall
+        coarsest = source.scale_factors[-1] if source.scale_factors else {}
+        reducible = [value for dim, value in residual.items() if coarsest.get(dim, 1) > 1]
         residuals.append(max(reducible) if reducible else 1)
         scale_keys = msi_utils.get_sorted_scale_keys(msim)[level:]
         result.append(DataTree.from_dict({f'scale{i}': msim[scale_key].ds

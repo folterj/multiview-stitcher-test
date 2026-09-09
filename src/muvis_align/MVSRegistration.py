@@ -92,24 +92,25 @@ class MVSRegistration:
             if progress_factory is not None
             else nullcontext(None)
         )
-        # Most of a source's msim build is opening its file and turning what it finds into an
-        # xarray DataTree - for OME-Zarr, ~33ms of ~43ms per source. That is the same per-file
-        # read init_sources() spreads across default_source_init_workers (and where, on network
-        # storage, it overlaps almost perfectly: a 4733-source run showed 276s of summed
-        # per-file time in 5.5s of wall time). Sources deliberately defer that read until
-        # something actually wants pixel-shaped data, which is here - so this has to do the
-        # overlapping init_sources() would otherwise have done, or the deferral just moves an
-        # I/O-bound phase into a serial one.
+        # This is where each source's pixel data is first actually opened - sources defer that
+        # read until something wants pixel-shaped data, and this is that something. For OME-Zarr
+        # it is ~33ms of the ~43ms per source locally, and 128-200ms on a network filesystem,
+        # where run sequentially it was the largest non-fusion phase of a large project (10-16
+        # minutes for ~4700 sources). It is the same per-file read init_sources() already
+        # overlaps across default_source_init_workers - to great effect there: a 4733-source run
+        # showed 276s of summed per-file time in 5.5s of wall time - so without the same pool
+        # here, deferring the read merely moves an I/O-bound phase into a serial one.
         #
         # Threads, not processes: the work is a file read plus xarray construction, and each
         # source's caches (_msim, _redimensioned_msims) belong to that source alone, so no two
-        # workers touch the same state. On a local SSD the read is already warm and the xarray
-        # half dominates, so this is roughly neutral there (measured 0.9-1.0x); the win is on
-        # the storage where the read actually costs something.
-        source_times = []
-        phase_start = time.time()
+        # workers touch the same state. On a local SSD the read is already warm and the
+        # GIL-bound xarray half dominates, so this measures 0.9-1.0x there; the win is on the
+        # storage where the read actually costs something.
         nsources = len(self.sources)
         msims = [None] * nsources
+        # list.append is atomic under the GIL, so plain appends from worker threads need no lock
+        source_times = []
+        phase_start = time.time()
         max_workers = 1
 
         def build_msim(index):
@@ -117,7 +118,6 @@ class MVSRegistration:
             msim = build_source_msim(self.sources[index], self._msim_output_order,
                                      self.positions[index], self._msim_transforms[index],
                                      self.source_transform_key, z_scale=self._msim_z_scale)
-            # list.append is atomic under the GIL, so plain appends from worker threads are safe
             source_times.append(time.time() - source_start)
             return msim
 
@@ -128,8 +128,8 @@ class MVSRegistration:
                     futures = {executor.submit(build_msim, index): index
                               for index in range(nsources)}
                     for future in as_completed(futures):
-                        # results collected by index, so msims stays in source order however the
-                        # futures happen to complete
+                        # collected by index, so msims stays in source order however the futures
+                        # happen to complete - each one is paired with its own position/transform
                         msims[futures[future]] = future.result()
                         if pbar is not None:
                             pbar.update(1)
@@ -139,14 +139,15 @@ class MVSRegistration:
                     pbar.update(1)
         self._msims = msims
         if self.logging_time and source_times:
-            # as in init_sources(): wall time close to the summed per-source time means GIL-bound
-            # xarray work that more threads won't fix, well below it means the file reads are
-            # being usefully overlapped
+            wall_time = time.time() - phase_start
+            total_time = sum(source_times)
+            # as in init_sources(): wall time well below the per-source total means the I/O is
+            # being usefully overlapped; wall time close to it means the remaining cost is
+            # GIL-bound and more workers will not help
             logging.info(f'Build msims: {len(source_times)} sources with {max_workers} workers, '
-                        f'wall {time.time() - phase_start:.1f}s, '
-                        f'per-source total {sum(source_times):.1f}s '
-                        f'(mean {1000 * sum(source_times) / len(source_times):.0f}ms, '
-                        f'max {1000 * max(source_times):.0f}ms)')
+                        f'wall {wall_time:.1f}s, per-source total {total_time:.1f}s '
+                        f'(mean {1000 * total_time / len(source_times):.0f}ms,'
+                        f' max {1000 * max(source_times):.0f}ms)')
 
     def reset(self):
         self.state = RegState.UNINIT
@@ -270,12 +271,8 @@ class MVSRegistration:
         operation = self.operation
         source_metadata = self.source_metadata
         extra_metadata = self.extra_metadata
-        if isinstance(extra_metadata, dict):
-            z_scale = extra_metadata.get('scale', {}).get('z')
-            channels = extra_metadata.get('channels', [])
-        else:
-            z_scale = None
-            channels = []
+        z_scale = get_metadata_z_scale(extra_metadata)
+        channels = extra_metadata.get('channels', []) if isinstance(extra_metadata, dict) else []
         normalise_orientation = 'norm' in source_metadata
         output_params = self.output_params
         general_output_params = self.params_general.get('output', {})
@@ -546,10 +543,7 @@ class MVSRegistration:
         source_metadata_changed = (source_metadata != self.source_metadata)
         self.source_metadata = source_metadata
         self.extra_metadata = extra_metadata
-        if isinstance(source_metadata, dict):
-            z_scale = source_metadata.get('scale', {}).get('z')
-        if not z_scale and isinstance(extra_metadata, dict):
-            z_scale = extra_metadata.get('scale', {}).get('z')
+        z_scale = get_metadata_z_scale(source_metadata) or get_metadata_z_scale(extra_metadata)
 
         if len(self.filenames) == 0:
             raise ValueError('No input files')
@@ -599,7 +593,11 @@ class MVSRegistration:
                 z_position = 0
             if last_z_position is not None and z_position != last_z_position:
                 delta_zs.append(z_position - last_z_position)
-            if 'rotation' in source_metadata:
+            if 'rotation' in source_metadata and not check_contains_value(source_metadata['rotation'], 'source'):
+                # 'source' means "keep whatever the file itself reports" - ImageSource.fix_metadata
+                # has already resolved that into source.get_rotation() (read just above). Taking
+                # the raw config value here regardless would hand create_transform() the literal
+                # string 'source' instead of an angle.
                 rotation = source_metadata['rotation']
             if self.global_rotation is not None:
                 rotation = self.global_rotation
@@ -755,10 +753,7 @@ class MVSRegistration:
             #z_positions = set([source.get_position().get('z', 0) for source in self.sources])
             #make_3d = len(z_positions) > 1 or is_stack
             make_3d = is_stack
-            if isinstance(self.extra_metadata, dict):
-                z_scale = self.extra_metadata.get('scale', {}).get('z')
-            else:
-                z_scale = None
+            z_scale = get_metadata_z_scale(self.extra_metadata)
 
             mappings = read_transforms(mappings_filename)
             # write reg_transform_key onto self.msims (msim -> msim, every scale, no sim needed) -
@@ -1446,12 +1441,7 @@ class MVSRegistration:
         if transform_key is None:
             transform_key = self.reg_transform_key
 
-        if isinstance(self.source_metadata, dict):
-            z_scale = self.source_metadata.get('scale', {}).get('z')
-        elif isinstance(extra_metadata, dict):
-            z_scale = extra_metadata.get('scale', {}).get('z')
-        else:
-            z_scale = None
+        z_scale = get_metadata_z_scale(self.source_metadata) or get_metadata_z_scale(extra_metadata)
 
         if z_scale is None:
             z_scale = extract_z_scale(self.positions, self.scales)
@@ -1611,10 +1601,7 @@ class MVSRegistration:
         output_params = self.params_general['output']
         preview_scale = output_params.get('preview_scale', 16)
         is_stack = ('stack' in self.operation)
-        if isinstance(self.extra_metadata, dict):
-            z_scale = self.extra_metadata.get('scale', {}).get('z')
-        else:
-            z_scale = None
+        z_scale = get_metadata_z_scale(self.extra_metadata)
 
         # select this preview resolution directly from self.msims (already built by init_data())
         # via pure msim slicing - no sim extraction, no resize, and (below) no wrapping back into

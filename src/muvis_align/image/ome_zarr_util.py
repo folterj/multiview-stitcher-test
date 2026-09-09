@@ -195,10 +195,14 @@ def read_ome_zarr_source_metadata(path):
     return metadata
 
 
-def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, omero):
+def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, omero, paths=None):
     """Shared tail of both read paths: map per-level file dims/shapes/scales onto the forced
     t/c sim dimension order. scales is one dict per level (keyed by file dim), translation one
     dict for the finest level; either may omit dims (defaulting to 1.0 / 0.0).
+
+    `paths` are the levels' own array paths within the store, so a caller can open each level's
+    array directly (see ZarrImageSource._load_data) instead of going back through a full msim
+    read - None whenever they could not be established.
     """
     sim_dims = ngff_dims_to_sim_dims(file_dims)
     spatial_dims = [dim for dim in sim_dims if dim in sim_spatial_dims]
@@ -211,7 +215,7 @@ def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, o
     nchannels = dict(zip(sim_dims, shapes[0])).get('c', 1)
     return {'dimension_order': ''.join(sim_dims), 'shapes': shapes, 'dtype': np.dtype(dtype),
             'pixel_sizes': pixel_sizes, 'position': position, 'nchannels': int(nchannels),
-            'omero': omero}
+            'omero': omero, 'paths': paths}
 
 
 def _read_consolidated_ome_zarr_metadata(path):
@@ -279,8 +283,9 @@ def _read_consolidated_ome_zarr_metadata(path):
         return None
 
     ome = root.get('attributes', {}).get('ome', {})
+    paths = [dataset.get('path') for dataset in multiscale.get('datasets', [])]
     return _build_source_metadata(file_dims, file_shapes, dtype, scales, translation,
-                                  ome.get('omero'))
+                                  ome.get('omero'), paths=paths)
 
 
 def _read_ngff_ome_zarr_metadata(path):
@@ -299,10 +304,16 @@ def _read_ngff_ome_zarr_metadata(path):
     if omero is not None and not isinstance(omero, dict):
         dump = getattr(omero, 'model_dump', None)
         omero = dump() if dump is not None else None
+    datasets = getattr(multiscales.metadata, 'datasets', None) or []
+    paths = [getattr(dataset, 'path', None) for dataset in datasets]
+    if len(paths) != len(images) or not all(paths):
+        # no usable per-level array paths - _load_data() then falls back to the msim reader
+        paths = None
     return _build_source_metadata(
         file_dims,
         [tuple(image.data.shape) for image in images],
         images[0].data.dtype,
         [dict(image.scale) for image in images],
         dict(images[0].translation),
-        omero)
+        omero,
+        paths=paths)

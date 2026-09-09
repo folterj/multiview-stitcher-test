@@ -217,12 +217,14 @@ def test_build_source_shape_sim_promote_z_matches_make_msims_3d():
 
 @pytest.mark.parametrize('filename', ZARR_FILES)
 def test_zarr_image_source_never_extracts_sims_or_populates_data(filename):
-    """ZarrImageSource works entirely off self.msim - it never calls msi_utils.get_sim_from_msim
-    (metadata comes straight from each scale's own 'image' DataArray) and never populates
-    self.data (get_level_data() reads the raw array directly off the msim instead)."""
+    """ZarrImageSource never calls msi_utils.get_sim_from_msim (metadata comes straight from each
+    scale's own 'image' DataArray), and self.data holds one raw dask array per level, opened
+    directly off the store - which is what lets the base class synthesize coarse levels for a
+    single-resolution store (see ZarrImageSource._load_data)."""
     source = ZarrImageSource(str(DATA_DIR / filename))
 
-    assert source.data == []
+    assert len(source.data) == len(source.shapes)
+    assert [tuple(data.shape) for data in source.data] == [tuple(shape) for shape in source.shapes]
     for level in range(len(source.pixel_sizes)):
         level_data = source.get_level_data(level)
         sim_data = _sim_at(source, level).data
@@ -230,13 +232,15 @@ def test_zarr_image_source_never_extracts_sims_or_populates_data(filename):
         np.testing.assert_array_equal(np.asarray(level_data.compute()), np.asarray(sim_data.compute()))
 
 
-def test_zarr_image_source_scale_override_reaches_getters_not_native_msim_coords():
-    """A source_metadata scale/position override always reaches get_pixel_size()/get_position()
-    (what the real registration pipeline actually reads - MVSRegistration never reads geometry
-    off a source's own msim coords). For ZarrImageSource specifically, the msim itself keeps
-    read_msim_from_ome_zarr's native coordinates untouched - trusted as correct since they come
-    from the file's own calibration - rather than being restamped to match the override."""
+def test_zarr_image_source_scale_override_reaches_getters_and_msim_coords():
+    """A source_metadata scale/position override reaches get_pixel_size()/get_position() - what
+    the real registration pipeline actually reads - and, since ZarrImageSource now builds its
+    msim from raw per-level arrays the same way TiffImageSource does, the msim's own coordinates
+    too. (It previously kept read_msim_from_ome_zarr's native coordinates instead, so the two
+    formats disagreed on a point nothing downstream reads: build_source_msim() re-assigns every
+    level's coordinates from source.pixel_sizes regardless.)"""
     native_pixel_size = ZarrImageSource(str(DATA_DIR / ZARR_FILES[0])).get_pixel_size()
+    assert native_pixel_size['x'] != pytest.approx(0.01)
 
     source_metadata = {'scale': {'x': 0.01, 'y': 0.01}, 'position': {'x': 5, 'y': 7}}
     source = ZarrImageSource(str(DATA_DIR / ZARR_FILES[0]), source_metadata=source_metadata)
@@ -245,15 +249,12 @@ def test_zarr_image_source_scale_override_reaches_getters_not_native_msim_coords
     assert source.get_pixel_size()['x'] == pytest.approx(0.01)
     assert source.get_position()['x'] == pytest.approx(5)
 
-    # ...but not in the msim's own native coordinates
+    # ...and in the msim's own coordinates, level by level
     sim0 = _sim_at(source, 0)
     sim1 = _sim_at(source, 1)
-    spacing0 = si_utils.get_spacing_from_sim(sim0)
-    spacing1 = si_utils.get_spacing_from_sim(sim1)
-    assert spacing0['x'] == pytest.approx(native_pixel_size['x'])
-    assert spacing1['x'] == pytest.approx(native_pixel_size['x'] * 2)  # level 1 is half the resolution
-    origin0 = si_utils.get_origin_from_sim(sim0)
-    assert origin0['x'] == pytest.approx(0)
+    assert si_utils.get_spacing_from_sim(sim0)['x'] == pytest.approx(0.01)
+    assert si_utils.get_spacing_from_sim(sim1)['x'] == pytest.approx(0.02)  # level 1 is half the resolution
+    assert si_utils.get_origin_from_sim(sim0)['x'] == pytest.approx(5)
 
 
 def test_zarr_image_source_restamped_affine_matches_native_shape():
