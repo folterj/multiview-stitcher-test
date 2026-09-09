@@ -11,8 +11,8 @@ import pytest
 from multiview_stitcher import msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 
-from muvis_align.image.util import (drop_finest_msim_level, estimate_fused_size,
-                                    reduce_msims_to_fused_size)
+from muvis_align.image.util import (coarsen_msims, drop_finest_msim_level,
+                                    estimate_fused_size, reduce_msims_to_fused_size)
 
 KEY = 'affine_metadata'
 
@@ -83,34 +83,76 @@ def test_an_oversized_preview_is_reduced_until_it_fits():
     assert len(capped) == len(msims)
 
 
-def test_single_level_msims_are_returned_without_measuring_them(caplog):
-    """Nothing can be dropped, so the estimate could only confirm that at full price (~4s for
-    4733 sources). This is the ordinary shape of the preprocessed preview - pre-processing at
-    scale 8 has already reduced every source to one level - so it is not worth a warning
-    either: that reduction is the setting doing its job."""
-    import logging
-
+def test_single_level_msims_are_still_reduced_for_display():
+    """The preprocessed preview arrives as a single level - pre-processing at scale 8 has
+    already reduced it - so there is nothing to drop. It must still be reducible for display,
+    by striding, or the cap would not apply on the path that needed it most."""
     msims = grid(levels=1)
-    with caplog.at_level(logging.WARNING):
-        capped = reduce_msims_to_fused_size(msims, KEY, max_bytes=1)
+    size = fused_bytes(msims)
+    budget = size // 8
 
-    assert capped is msims
-    assert caplog.text == ''
+    capped = reduce_msims_to_fused_size(msims, KEY, max_bytes=budget)
+
+    assert fused_bytes(capped) <= budget
+    assert fused_bytes(capped) < size
 
 
-def test_it_warns_when_it_runs_out_of_levels_part_way(caplog):
-    """Started with room to reduce, ran out before fitting - that must end the loop and be
-    reported, not spin or silently look successful."""
+def test_striding_halves_x_and_y_and_leaves_z_alone():
+    """The output's z extent comes from how many heights the sources sit at, so striding z
+    would drop sections napari steps through without shrinking the fused result."""
+    msims = grid(levels=1)
+    coarser, changed = coarsen_msims(msims)
+
+    assert changed is True
+    before = msims[0]['scale0'].ds['image']
+    after = coarser[0]['scale0'].ds['image']
+    for dim in 'yx':
+        assert after.sizes[dim] == before.sizes[dim] // 2
+        assert si_utils.get_spacing_from_sim(after)[dim] == pytest.approx(
+            si_utils.get_spacing_from_sim(before)[dim] * 2)
+        # same place, just sampled coarser
+        assert si_utils.get_origin_from_sim(after)[dim] == pytest.approx(
+            si_utils.get_origin_from_sim(before)[dim])
+    if 'z' in before.dims:
+        assert after.sizes['z'] == before.sizes['z']
+
+
+def test_striding_keeps_the_transform():
+    msims = grid(levels=1)
+    coarser, _ = coarsen_msims(msims)
+
+    before = msi_utils.get_sim_from_msim(msims[0], scale='scale0')
+    after = msi_utils.get_sim_from_msim(coarser[0], scale='scale0')
+    np.testing.assert_allclose(
+        np.asarray(si_utils.get_affine_from_sim(after, transform_key=KEY)),
+        np.asarray(si_utils.get_affine_from_sim(before, transform_key=KEY)))
+
+
+def test_it_gives_up_on_something_that_cannot_shrink(caplog):
+    """A 1x1 image cannot be strided smaller - that must end the loop and be reported, not
+    spin on it."""
     import logging
 
-    msims = grid(levels=2)
+    msims = [make_msim(1, 1)]
     with caplog.at_level(logging.WARNING):
         capped = reduce_msims_to_fused_size(msims, KEY, max_bytes=1)
 
-    assert len(msi_utils.get_sorted_scale_keys(capped[0])) == 1, 'should have dropped what it could'
-    assert 'no coarser pyramid level remains' in caplog.text
-    # reports the size actually being fused, without prescribing a fix that may not apply
-    assert 'deeper pyramid' not in caplog.text
+    assert len(capped) == 1
+    assert 'cannot be reduced any further' in caplog.text
+
+
+def test_the_input_msims_are_not_modified():
+    """The cap is display-only: pre-processing's own scale is what registration uses, and must
+    survive untouched."""
+    msims = grid(levels=1)
+    before = [(len(msi_utils.get_sorted_scale_keys(m)), m['scale0'].ds['image'].shape)
+              for m in msims]
+
+    reduce_msims_to_fused_size(msims, KEY, max_bytes=fused_bytes(msims) // 8)
+
+    after = [(len(msi_utils.get_sorted_scale_keys(m)), m['scale0'].ds['image'].shape)
+             for m in msims]
+    assert after == before
 
 
 def test_reduction_stops_as_soon_as_it_fits_rather_than_going_coarsest():

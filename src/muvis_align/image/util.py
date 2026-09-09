@@ -2244,6 +2244,41 @@ def drop_finest_msim_level(msims):
     return result, changed
 
 
+def coarsen_msims(msims, factor=2):
+    """Each msim as a single coarser level, by striding its own coarsest level in x/y.
+
+    The fallback for reducing something that has no coarser level left to drop to - a
+    preprocessed msim, say, which pre-processing has already reduced to one level. Strided
+    rather than mean-downsampled for the same reason build_missing_pyramid_levels() is: this
+    only ever feeds a preview, and a mean would add a full reduction pass over data that is
+    about to be thrown away at display resolution.
+
+    x/y only. The output's z extent comes from how many distinct heights the sources sit at,
+    not from any source's own z, so striding z would not shrink the fused result - it would
+    only throw away sections (or z resolution, for a real volume) that napari steps through.
+
+    Returns (msims, changed); `changed` is False when striding could not make anything smaller,
+    which ends the caller's loop rather than spinning on it.
+    """
+    result = []
+    changed = False
+    for msim in msims:
+        scale_keys = msi_utils.get_sorted_scale_keys(msim)
+        dataset = msim[scale_keys[-1]].ds
+        image = dataset['image']
+        slicing = tuple(slice(None, None, factor if dim in 'xy' else 1) for dim in image.dims)
+        coarser = image[slicing]
+        if coarser.shape == image.shape:
+            result.append(msim)
+            continue
+        changed = True
+        # the transforms travel as their own data variables alongside 'image' and are
+        # resolution-independent, so they carry over untouched; striding takes every factor'th
+        # coordinate, which leaves the origin where it was and scales the spacing to match
+        transforms = {name: dataset[name] for name in dataset.data_vars if name != 'image'}
+        result.append(DataTree.from_dict({'scale0': xr.Dataset({'image': coarser, **transforms})}))
+    return result, changed
+
 def estimate_fused_size(msims, transform_key, output_spacing_method=None, z_scale=None):
     """Bytes the fused output of `msims` would occupy, by the same reckoning MVSRegistration.
     fuse() reports as 'Fusing ...' - the output stack's own shape times the source dtype.
@@ -2277,28 +2312,21 @@ def reduce_msims_to_fused_size(msims, transform_key, max_bytes=default_preview_m
     Sources whose pyramid runs out first simply stop contributing reductions - hence the
     `changed` check, which ends the loop when nothing moved rather than spinning.
     """
-    if not any(len(msi_utils.get_sorted_scale_keys(msim)) > 1 for msim in msims):
-        # single-level msims cannot be reduced at all, so the estimate could only confirm that
-        # at full price (~4s for 4733 sources). This is the ordinary shape of the preprocessed
-        # preview: pre-processing at scale 8 already reduced every source to one level, which is
-        # the reduction doing its job, not a pyramid that fell short. fuse() logs the resulting
-        # size either way, so nothing is lost by not measuring it here.
-        return msims
     size, _ = estimate_fused_size(msims, transform_key, output_spacing_method, z_scale)
     if size <= max_bytes:
         return msims
     original_size = size
     reduced = msims
     for _ in range(max_steps):
+        # a real coarser level where one exists (free - it is already in the file), otherwise
+        # strided down for display only
         coarser, changed = drop_finest_msim_level(reduced)
         if not changed:
-            # every msim is down to its last level part-way through - report the size actually
-            # being fused rather than implying a fix that may not apply (whether a deeper
-            # pyramid is even possible depends on where these msims came from)
+            coarser, changed = coarsen_msims(reduced)
+        if not changed:
             logging.warning(
                 f'{label}: fusing {print_hbytes(size)}, over the'
-                f' {print_hbytes(max_bytes)} budget - no coarser pyramid level remains to'
-                f' reduce it further')
+                f' {print_hbytes(max_bytes)} budget - cannot be reduced any further')
             return reduced
         reduced = coarser
         size, _ = estimate_fused_size(reduced, transform_key, output_spacing_method, z_scale)
