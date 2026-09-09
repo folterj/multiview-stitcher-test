@@ -28,7 +28,8 @@ except Exception as e:
     print(f'matplotlib import error:\n{e}')
 
 from muvis_align.constants import (default_chunk_size, default_contrast_limits_max_tasks,
-                                   default_fusion_chunk_bytes, fusion_stack_arrays)
+                                   default_fusion_chunk_bytes, default_preview_max_bytes,
+                                   fusion_stack_arrays)
 from muvis_align.util import *
 
 
@@ -2223,6 +2224,80 @@ def extract_sims_from_msims(msims, sources, transform_key, target_scale):
         sims.append(sim)
     return sims
 
+
+def drop_finest_msim_level(msims):
+    """Each msim minus its finest level, as a genuine (shallower) sub-pyramid - pure msim
+    slicing, the same construction select_msim_subpyramid_at_scale() uses. Returns
+    (msims, changed); an msim already down to a single level is returned untouched, and
+    `changed` is False when none of them could be reduced any further.
+    """
+    result = []
+    changed = False
+    for msim in msims:
+        scale_keys = msi_utils.get_sorted_scale_keys(msim)
+        if len(scale_keys) > 1:
+            changed = True
+            result.append(DataTree.from_dict({f'scale{index}': msim[scale_key].ds
+                                              for index, scale_key in enumerate(scale_keys[1:])}))
+        else:
+            result.append(msim)
+    return result, changed
+
+
+def estimate_fused_size(msims, transform_key, output_spacing_method=None, z_scale=None):
+    """Bytes the fused output of `msims` would occupy, by the same reckoning MVSRegistration.
+    fuse() reports as 'Fusing ...' - the output stack's own shape times the source dtype.
+
+    Metadata only (calc_output_properties reads per-sim spacing/origin/affine, never pixel
+    data), so it is cheap enough to ask before committing to a fusion: measured at 0.27s for
+    328 sources, ~4s for 4733.
+    """
+    properties = calc_output_properties(msims, transform_key,
+                                        output_spacing_method=output_spacing_method,
+                                        z_scale=z_scale)
+    itemsize = get_msim_image0(msims[0]).dtype.itemsize
+    return int(np.prod([int(size) for size in properties['shape'].values()]) * itemsize), properties
+
+
+def reduce_msims_to_fused_size(msims, transform_key, max_bytes=default_preview_max_bytes,
+                               output_spacing_method=None, z_scale=None, max_steps=16,
+                               label='preview'):
+    """`msims` stepped to coarser pyramid levels until fusing them would produce at most
+    max_bytes - the guard that keeps an on-screen preview from fusing an arbitrarily large
+    stack.
+
+    A preview occupies a few hundred pixels on screen whatever is behind it, so the size of the
+    fused result is the thing worth bounding, rather than any particular way of choosing a
+    level. preview_scale cannot do this job: it picks a level relative to each source's own
+    pyramid, so the result still scales with the dataset, and the post-pre-processing preview
+    is built from register_msims and never consults it at all. Working from the fused size
+    instead covers both, and needs no per-source assumptions: it just drops the finest level
+    while the result is too large and there is still a coarser one to drop to.
+
+    Sources whose pyramid runs out first simply stop contributing reductions - hence the
+    `changed` check, which ends the loop when nothing moved rather than spinning.
+    """
+    size, _ = estimate_fused_size(msims, transform_key, output_spacing_method, z_scale)
+    if size <= max_bytes:
+        return msims
+    original_size = size
+    reduced = msims
+    for _ in range(max_steps):
+        coarser, changed = drop_finest_msim_level(reduced)
+        if not changed:
+            logging.warning(
+                f'{label}: fusing {print_hbytes(size)} exceeds the {print_hbytes(max_bytes)}'
+                f' budget, but no source has a coarser pyramid level left to drop to'
+                f' - converting these sources with a deeper pyramid would let this be reduced')
+            return reduced
+        reduced = coarser
+        size, _ = estimate_fused_size(reduced, transform_key, output_spacing_method, z_scale)
+        if size <= max_bytes:
+            break
+    logging.info(f'{label}: reduced to {print_hbytes(size)} '
+                 f'(fusing at the requested resolution would have been {print_hbytes(original_size)},'
+                 f' over the {print_hbytes(max_bytes)} budget)')
+    return reduced
 
 def select_msim_subpyramid_at_scale(msims, sources, target_scale, shortfall_warn_factor=4):
     """Select, per source, every native pyramid level from the nearest match to `target_scale`

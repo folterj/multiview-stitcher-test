@@ -128,6 +128,14 @@ default_preview_workers = _available_cpus
 # on-screen preview stays proportionate to an exported one rather than fusing at native/scale0
 # resolution regardless of how large or how many sources there are
 default_interactive_preview_scale = 16
+# ...and an upper bound on what that preview may cost regardless of how it was reached. The
+# preview is a few hundred pixels on screen however large the fused stack behind it is, so
+# fusing more than this to draw it is wasted: a run whose pre-processing scale was 1 fused
+# 396.9GB and took 55 minutes to show what an 8x-reduced one showed in 9. preview_scale alone
+# cannot prevent that - it selects a level relative to each source's own pyramid, and the
+# post-pre-processing preview does not go through it at all - so the guard is on the resulting
+# size instead (see image.util.reduce_msims_to_fused_size).
+default_preview_max_bytes = 4 * 1024 ** 3
 
 prereg_mappings_name = 'prereg_mappings.csv'
 default_pair_mappings_name = 'pair_mappings.json'

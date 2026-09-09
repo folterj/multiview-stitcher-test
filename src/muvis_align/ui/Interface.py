@@ -22,7 +22,7 @@ from muvis_align.image.util import get_sim_physical_size, get_sim_position_final
     draw_keypoints_matches_napari, get_transforms, copy_transforms_to_msims, \
     make_msims_3d, metric_to_rgb, get_msim_level_data, get_contrast_limits, \
     get_msim_image0, wrap_sims_as_msims, extract_sims_from_fused, extract_sims_from_msims, \
-    select_msim_subpyramid_at_scale
+    select_msim_subpyramid_at_scale, reduce_msims_to_fused_size
 from muvis_align.file.resources import get_project_template
 from muvis_align.logging import init_logging
 from muvis_align.metrics import calc_msims_metrics
@@ -623,6 +623,15 @@ class Interface:
             with Timer(f'_create_napari_data: copy {len(self.reg.register_msims)} register_msims',
                       verbose=self._timing_verbose()):
                 msims = [msim.copy(deep=True) for msim in self.reg.register_msims]
+            # promoted here, as self.view_msims does for the other branch, so the size estimate
+            # below sees the same geometry fuse() will: fuse() promotes internally when sources
+            # sit at several z heights, and calc_output_properties cannot combine un-promoted
+            # sims that disagree about z. Not extra work - fuse() now recognises an
+            # already-promoted msim and leaves it alone (see make_msims_3d).
+            if len(set(position.get('z', 0) for position in self.reg.positions)) > 1:
+                with Timer('_create_napari_data: promote register_msims to 3D',
+                          verbose=self._timing_verbose()):
+                    msims = make_msims_3d(msims, positions=self.reg.positions)
         else:
             # view_msims (unlike register_msims) is never scale-reduced - every source's full
             # native pyramid, un-preprocessed. Fusing that at native/scale0 resolution just to
@@ -637,6 +646,19 @@ class Interface:
             with Timer(f'_create_napari_data: select_msim_subpyramid_at_scale ({len(view_msims)} images)',
                       verbose=self._timing_verbose()):
                 msims = select_msim_subpyramid_at_scale(view_msims, self.reg.sources, preview_scale)
+        # Whichever branch produced them, cap what this preview will actually fuse. The
+        # show_preprocessed branch never consults preview_scale - its resolution comes from
+        # pre_processing's own scale - so with that set to 1 the "preview" is the whole dataset:
+        # one run fused 396.9GB over 55 minutes to draw what an 8x-reduced one drew in 9. And
+        # preview_scale could not have prevented it anyway, since it picks a level per source
+        # rather than bounding the combined result. Note this cannot be done by applying
+        # select_msim_subpyramid_at_scale() here: its level index is relative to each *source's*
+        # own pyramid, while register_msims have already been scale-reduced (at pre-processing
+        # scale 8 they carry a single level), so asking it for level 3 would select nothing.
+        with Timer('_create_napari_data: cap preview fusion size', verbose=self._timing_verbose()):
+            msims = reduce_msims_to_fused_size(
+                msims, transform_key, z_scale=self.reg._msim_z_scale,
+                label=f'Preview fusion ({len(msims)} images)')
         with Timer('_create_napari_data: copy_transforms_to_msims', verbose=self._timing_verbose()):
             copy_transforms_to_msims(self.reg.msims, msims, transform_key)
         # output_chunksize is deliberately left to fuse(), which derives it (get_chunk_sizes)
