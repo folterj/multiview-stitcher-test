@@ -200,9 +200,9 @@ def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, o
     t/c sim dimension order. scales is one dict per level (keyed by file dim), translation one
     dict for the finest level; either may omit dims (defaulting to 1.0 / 0.0).
 
-    `paths` are the levels' own array paths within the store, and `file_shapes` their on-disk
-    shapes - both as read, before the t/c mapping - so a caller can open each level's array
-    directly (see ZarrImageSource._load_data) instead of going back through a full msim read.
+    `paths` are the levels' own array paths within the store, so a caller can open each level's
+    array directly (see ZarrImageSource._load_data) instead of going back through a full msim
+    read - None whenever they could not be established.
     """
     sim_dims = ngff_dims_to_sim_dims(file_dims)
     spatial_dims = [dim for dim in sim_dims if dim in sim_spatial_dims]
@@ -215,7 +215,7 @@ def _build_source_metadata(file_dims, file_shapes, dtype, scales, translation, o
     nchannels = dict(zip(sim_dims, shapes[0])).get('c', 1)
     return {'dimension_order': ''.join(sim_dims), 'shapes': shapes, 'dtype': np.dtype(dtype),
             'pixel_sizes': pixel_sizes, 'position': position, 'nchannels': int(nchannels),
-            'omero': omero, 'paths': paths, 'file_shapes': list(file_shapes)}
+            'omero': omero, 'paths': paths}
 
 
 def _read_consolidated_ome_zarr_metadata(path):

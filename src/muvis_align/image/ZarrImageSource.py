@@ -33,7 +33,8 @@ class ZarrImageSource(ImageSource):
         # metadata read could not establish them, in which case _load_data() falls back to the
         # msim reader
         self._level_paths = metadata.get('paths')
-        self._file_shapes = metadata.get('file_shapes')
+        # how many levels the store itself has, before any are synthesized on top
+        self._native_nlevels = len(self.shapes)
 
         # a 'c' dim is always present (si_utils.get_sim_from_array forces one, at size 1 for a
         # file that has none), so there is always at least one channel to describe. Labels stay
@@ -68,15 +69,32 @@ class ZarrImageSource(ImageSource):
         if not self._level_paths:
             self._build_msim_natively()
             return
-        datas = []
-        for path, file_shape, sim_shape in zip(self._level_paths, self._file_shapes, self.shapes):
-            data = da.from_zarr(self.filename, component=path)
-            if tuple(data.shape) != tuple(sim_shape):
-                # the store's own dims, mapped onto the sim's forced t/c order - that only ever
-                # inserts size-1 axes (ngff_dims_to_sim_dims keeps the file's own dim order), so
-                # a reshape is exactly that insertion and moves no data
-                data = data.reshape(sim_shape)
-            datas.append(data)
+        try:
+            datas = []
+            for path, sim_shape in zip(self._level_paths, self.shapes):
+                data = da.from_zarr(self.filename, component=path)
+                if tuple(data.shape) != tuple(sim_shape):
+                    # the store's own dims, mapped onto the sim's forced t/c order - that only
+                    # ever inserts size-1 axes (ngff_dims_to_sim_dims keeps the file's own dim
+                    # order), so a reshape is exactly that insertion and moves no data
+                    data = data.reshape(sim_shape)
+                datas.append(data)
+        except Exception as e:
+            # anything da.from_zarr cannot open by path on its own - a remote URL needing a
+            # store/mapper, an unusual layout - stays correct by going back through the reader
+            # that handled it before, just without synthesized coarse levels
+            logging.warning(f'{self.filename}: could not open pyramid levels directly'
+                            f' ({e}) - falling back to reading the msim')
+            self._level_paths = None
+            # the msim below has only the levels the store really has, so drop any this source
+            # had already settled as synthesized (during __init__, back when opening the arrays
+            # directly still looked possible) - otherwise self.shapes describes a deeper pyramid
+            # than the msim has, and get_shape(level)/get_pixel_size(level) index past its end
+            self.shapes = self.shapes[:self._native_nlevels]
+            self.pixel_sizes = self.pixel_sizes[:self._native_nlevels]
+            self.scale_factors = self.scale_factors[:self._native_nlevels]
+            self._build_msim_natively()
+            return
         self._data = datas
 
     def _build_msim_natively(self):
