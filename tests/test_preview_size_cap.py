@@ -83,17 +83,34 @@ def test_an_oversized_preview_is_reduced_until_it_fits():
     assert len(capped) == len(msims)
 
 
-def test_it_stops_at_the_coarsest_level_available_and_says_so(caplog):
-    """A pyramid that runs out cannot be reduced further - that must end the loop and be
-    reported, not spin or silently look successful."""
+def test_single_level_msims_are_returned_without_measuring_them(caplog):
+    """Nothing can be dropped, so the estimate could only confirm that at full price (~4s for
+    4733 sources). This is the ordinary shape of the preprocessed preview - pre-processing at
+    scale 8 has already reduced every source to one level - so it is not worth a warning
+    either: that reduction is the setting doing its job."""
     import logging
 
     msims = grid(levels=1)
     with caplog.at_level(logging.WARNING):
         capped = reduce_msims_to_fused_size(msims, KEY, max_bytes=1)
 
-    assert len(capped) == len(msims)
-    assert 'no source has a coarser pyramid level left' in caplog.text
+    assert capped is msims
+    assert caplog.text == ''
+
+
+def test_it_warns_when_it_runs_out_of_levels_part_way(caplog):
+    """Started with room to reduce, ran out before fitting - that must end the loop and be
+    reported, not spin or silently look successful."""
+    import logging
+
+    msims = grid(levels=2)
+    with caplog.at_level(logging.WARNING):
+        capped = reduce_msims_to_fused_size(msims, KEY, max_bytes=1)
+
+    assert len(msi_utils.get_sorted_scale_keys(capped[0])) == 1, 'should have dropped what it could'
+    assert 'no coarser pyramid level remains' in caplog.text
+    # reports the size actually being fused, without prescribing a fix that may not apply
+    assert 'deeper pyramid' not in caplog.text
 
 
 def test_reduction_stops_as_soon_as_it_fits_rather_than_going_coarsest():

@@ -2277,6 +2277,13 @@ def reduce_msims_to_fused_size(msims, transform_key, max_bytes=default_preview_m
     Sources whose pyramid runs out first simply stop contributing reductions - hence the
     `changed` check, which ends the loop when nothing moved rather than spinning.
     """
+    if not any(len(msi_utils.get_sorted_scale_keys(msim)) > 1 for msim in msims):
+        # single-level msims cannot be reduced at all, so the estimate could only confirm that
+        # at full price (~4s for 4733 sources). This is the ordinary shape of the preprocessed
+        # preview: pre-processing at scale 8 already reduced every source to one level, which is
+        # the reduction doing its job, not a pyramid that fell short. fuse() logs the resulting
+        # size either way, so nothing is lost by not measuring it here.
+        return msims
     size, _ = estimate_fused_size(msims, transform_key, output_spacing_method, z_scale)
     if size <= max_bytes:
         return msims
@@ -2285,10 +2292,13 @@ def reduce_msims_to_fused_size(msims, transform_key, max_bytes=default_preview_m
     for _ in range(max_steps):
         coarser, changed = drop_finest_msim_level(reduced)
         if not changed:
+            # every msim is down to its last level part-way through - report the size actually
+            # being fused rather than implying a fix that may not apply (whether a deeper
+            # pyramid is even possible depends on where these msims came from)
             logging.warning(
-                f'{label}: fusing {print_hbytes(size)} exceeds the {print_hbytes(max_bytes)}'
-                f' budget, but no source has a coarser pyramid level left to drop to'
-                f' - converting these sources with a deeper pyramid would let this be reduced')
+                f'{label}: fusing {print_hbytes(size)}, over the'
+                f' {print_hbytes(max_bytes)} budget - no coarser pyramid level remains to'
+                f' reduce it further')
             return reduced
         reduced = coarser
         size, _ = estimate_fused_size(reduced, transform_key, output_spacing_method, z_scale)
