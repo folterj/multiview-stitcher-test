@@ -5,8 +5,6 @@ all of it per file to read one plane's position is O(files^2) overall. The strea
 give byte-for-byte the same answers as the xml2dict version it replaces - including the {} it
 returns for a multi-Image XML - while stopping early.
 """
-import time
-
 import pytest
 from tifffile import tifffile
 
@@ -84,27 +82,27 @@ def test_units_are_converted_to_um():
     assert extract_ome_translation_from_xml(xml) == pytest.approx({'x': 1500.0, 'y': 2500.0})
 
 
-def test_cost_does_not_grow_with_the_dataset_size():
-    """The whole point: a 4733-image XML must not cost meaningfully more than a 2-image one,
-    since the parse stops at the second <Image> either way."""
-    small = ome_xml([{'PositionX': 1.0, 'PositionY': 2.0}] * 2)
-    large = ome_xml([{'PositionX': float(i), 'PositionY': 0.0} for i in range(4733)])
-    assert extract_ome_translation_from_xml(large) == extract_ome_translation_from_xml(small)
+def test_parsing_stops_once_the_answer_is_settled():
+    """The whole point: cost must not grow with the dataset, since a multi-file OME-TIFF carries
+    the whole dataset's XML in every file's header.
 
-    def timed(xml, repeats=20):
-        start = time.perf_counter()
-        for _ in range(repeats):
-            extract_ome_translation_from_xml(xml)
-        return (time.perf_counter() - start) / repeats
+    Asserted structurally rather than by the clock - a wall-time bound is flaky on a loaded
+    machine, and it was. The document below is malformed well past the first fed chunk, so
+    parsing it to the end would raise; returning normally proves the parse stopped early.
+    """
+    images = [{'PositionX': float(i), 'PositionY': 0.0} for i in range(4000)]
+    document = ome_xml(images).replace('</OME>', '<Unclosed>' * 5 + '<<<not xml&&&</OME>')
+    assert len(document) > 512 * 1024, 'the malformed tail must sit beyond the first chunk'
 
-    small_time, large_time = timed(small), timed(large)
-    # the parse settles at the second <Image>, inside the first fed chunk either way, so the
-    # 4733-image document must cost about the same as the 2-image one - not ~200x more, as
-    # xml2dict over the whole document does. A 5x band absorbs timing noise on a loaded CI box
-    # while still failing loudly if whole-document work creeps back in.
-    assert large_time < max(small_time * 5, 0.003), (
-        f'{large_time * 1000:.2f}ms for 4733 images vs {small_time * 1000:.2f}ms for 2'
-        f' - cost should not scale with the dataset')
+    # multi-Image, so no position - but crucially, no parse error either
+    assert extract_ome_translation_from_xml(document) == {}
+
+
+def test_a_single_image_document_is_still_read_to_the_end():
+    # the early exit fires on a second <Image>; with only one there is nothing to stop at, and
+    # such a document is small (a single tile's own metadata)
+    xml = ome_xml([{'PositionX': 9.0, 'PositionY': 10.0}])
+    assert extract_ome_translation_from_xml(xml) == pytest.approx({'x': 9.0, 'y': 10.0})
 
 
 def test_single_image_xml_still_reads_its_plane():

@@ -479,6 +479,42 @@ um_conversions = {
 }
 
 
+def format_phase_timing(wall_time, item_times, item_cpu_times, max_workers):
+    """One timing line for a threaded per-item phase, reported so it can actually be read.
+
+    The obvious summary - wall time against the summed per-item time - cannot distinguish the
+    two cases it is usually quoted for. Under a thread pool, an item's wall time includes
+    whatever it spent waiting for the GIL, so the sum inflates roughly in proportion to the
+    worker count whether the threads overlapped real waiting or merely queued behind each other.
+    Measured on 328 sources: summed per-source time went 15s -> 1028s from 1 to 64 workers while
+    wall time went 14.9s -> 16.6s, i.e. the 60x "overlap" that ratio suggests was worth nothing.
+
+    Per-item CPU time (time.thread_time) is not distorted that way, so it gives a usable floor:
+    Python can only run one thread's bytecode at a time, so no arrangement of threads finishes
+    this phase faster than the total CPU it needs. Hence
+
+        wall ~= cpu   the phase is at that floor - it is CPU/GIL-bound and more workers cannot
+                      help (they will cost a little)
+        wall >> cpu   time is going somewhere other than CPU (network/disk latency), which is
+                      exactly what more workers can overlap
+
+    so the printed ratio says which regime a run is in, rather than always looking like a win.
+    """
+    total_time = sum(item_times)
+    total_cpu = sum(item_cpu_times) if item_cpu_times else 0.0
+    summary = (f'with {max_workers} workers, wall {wall_time:.1f}s,'
+               f' per-item total {total_time:.1f}s, cpu {total_cpu:.1f}s'
+               f' (mean {1000 * total_time / len(item_times):.0f}ms,'
+               f' max {1000 * max(item_times):.0f}ms)')
+    if total_cpu > 0:
+        ratio = wall_time / total_cpu
+        regime = ('CPU-bound: at the single-thread floor, more workers will not help'
+                  if ratio < 1.3 else
+                  f'{1 - 1 / ratio:.0%} of wall time is not CPU: more workers can overlap it')
+        summary += f' - {regime}'
+    return summary
+
+
 def convert_to_um(value, unit):
     """`value` in `unit`, converted to um. An unrecognised unit is left unscaled - but logged,
     since silently treating it as um mis-scales geometry with nothing to show for it.

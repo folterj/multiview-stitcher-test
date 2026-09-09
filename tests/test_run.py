@@ -91,7 +91,13 @@ def test2(resource_file):
             affine_msim = si_utils.get_affine_from_sim(level_sim, reg.reg_transform_key)
             assert (affine_pair.values == affine_msim.values).all()
 
-    reg.fuse(reg.msims, output_filename='output')
+    # a store name unique to this test: the resource files' output directories are shared with
+    # the other tests here (test() runs the whole Pipeline into the same one), and writing a
+    # store another test has already written means overwriting it. zarr writes metadata
+    # atomically - temp file, then os.replace onto zarr.json - which on Windows fails with
+    # "Access is denied" if anything still holds the destination open, so a reader left alive
+    # by an earlier test made this fail intermittently.
+    reg.fuse(reg.msims, output_filename=f'output_test2_{os.path.splitext(resource_file)[0]}')
 
 
 @pytest.mark.parametrize(
@@ -107,6 +113,7 @@ def test_fuse_with_real_pyramid_matches_trivial_wrap(resource_file):
     import numpy as np
     from muvis_align.image.source_helper import create_image_source
     from muvis_align.image.util import wrap_sims_as_msims
+    import gc
     import shutil
 
     with open(os.path.join('resources', resource_file), 'r', encoding='utf8') as file:
@@ -125,19 +132,34 @@ def test_fuse_with_real_pyramid_matches_trivial_wrap(resource_file):
     from multiview_stitcher import msi_utils
     registered_sims = [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in reg.msims]
     trivial_msims = wrap_sims_as_msims(registered_sims)
-    filename_trivial, _ = 'test_fuse_trivial', reg.fuse(trivial_msims, output_filename='test_fuse_trivial')[1]
-    filename_pyramid, _ = 'test_fuse_pyramid', reg.fuse(reg.msims, output_filename='test_fuse_pyramid')[1]
+    # one output store per parametrisation. Sharing a fixed name across them meant each run
+    # overwrote the previous run's store, and zarr writes metadata atomically (temp file, then
+    # os.replace onto zarr.json) - which on Windows fails with "Access is denied" if anything
+    # still holds the destination open. The reader below is released only when it is collected,
+    # and the cleanup that would have removed the store ignores errors, so a lingering handle
+    # left it in place for the next parametrisation to trip over: an intermittent, full-suite-
+    # only failure.
+    stem = os.path.splitext(resource_file)[0]
+    filename_trivial = f'test_fuse_trivial_{stem}'
+    filename_pyramid = f'test_fuse_pyramid_{stem}'
+    reg.fuse(trivial_msims, output_filename=filename_trivial)
+    reg.fuse(reg.msims, output_filename=filename_pyramid)
 
     path_trivial = reg.output + filename_trivial + '.ome.zarr'
     path_pyramid = reg.output + filename_pyramid + '.ome.zarr'
+    a = b = None
     try:
         a = create_image_source(path_trivial).get_level_data(0).compute()
         b = create_image_source(path_pyramid).get_level_data(0).compute()
         assert a.shape == b.shape
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
     finally:
-        shutil.rmtree(path_trivial, ignore_errors=True)
-        shutil.rmtree(path_pyramid, ignore_errors=True)
+        # drop the readers before removing their stores: on Windows an open handle blocks the
+        # delete, and rmtree here ignores that, which is what used to leave a store behind
+        a = b = None
+        gc.collect()
+        for path in (path_trivial, path_pyramid):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def test_fuse_channel_overlay_real_pyramid_matches_trivial_wrap():

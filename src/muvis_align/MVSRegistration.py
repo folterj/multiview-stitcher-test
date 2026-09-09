@@ -108,17 +108,22 @@ class MVSRegistration:
         # storage where the read actually costs something.
         nsources = len(self.sources)
         msims = [None] * nsources
-        # list.append is atomic under the GIL, so plain appends from worker threads need no lock
+        # list.append is atomic under the GIL, so plain appends from worker threads need no lock.
+        # Both wall and CPU time per source: with several workers a task's wall time also counts
+        # the time it spent waiting for the GIL, so it inflates roughly in proportion to the
+        # worker count whether or not anything was actually overlapped - see the log below
         source_times = []
+        source_cpu_times = []
         phase_start = time.time()
         max_workers = 1
 
         def build_msim(index):
-            source_start = time.time()
+            source_start, cpu_start = time.time(), time.thread_time()
             msim = build_source_msim(self.sources[index], self._msim_output_order,
                                      self.positions[index], self._msim_transforms[index],
                                      self.source_transform_key, z_scale=self._msim_z_scale)
             source_times.append(time.time() - source_start)
+            source_cpu_times.append(time.thread_time() - cpu_start)
             return msim
 
         with progress_context as pbar:
@@ -139,15 +144,8 @@ class MVSRegistration:
                     pbar.update(1)
         self._msims = msims
         if self.logging_time and source_times:
-            wall_time = time.time() - phase_start
-            total_time = sum(source_times)
-            # as in init_sources(): wall time well below the per-source total means the I/O is
-            # being usefully overlapped; wall time close to it means the remaining cost is
-            # GIL-bound and more workers will not help
-            logging.info(f'Build msims: {len(source_times)} sources with {max_workers} workers, '
-                        f'wall {wall_time:.1f}s, per-source total {total_time:.1f}s '
-                        f'(mean {1000 * total_time / len(source_times):.0f}ms,'
-                        f' max {1000 * max(source_times):.0f}ms)')
+            logging.info(f'Build msims: {len(source_times)} sources'
+                         f' {format_phase_timing(time.time() - phase_start, source_times, source_cpu_times, max_workers)}')
 
     def reset(self):
         self.state = RegState.UNINIT
@@ -485,18 +483,20 @@ class MVSRegistration:
             per_file_metadata.append(copy.deepcopy(source_metadata))
 
         with progress_context as pbar:
-            # per-file durations (list.append is atomic under the GIL, so plain appends from
-            # multiple worker threads are safe here without a lock) - only used to log where
-            # init_sources() actually spends its time; see below
+            # per-file wall and CPU durations (list.append is atomic under the GIL, so plain
+            # appends from multiple worker threads are safe here without a lock) - only used to
+            # log where init_sources() actually spends its time; see format_phase_timing()
             file_times = []
+            file_cpu_times = []
 
             def build_source(index, matrix_size):
-                start = time.time()
+                start, cpu_start = time.time(), time.thread_time()
                 source = create_image_source(
                     self.filenames[index], per_file_metadata[index], extra_metadata=self.extra_metadata,
                     file_label=self.file_labels[index], transform_key=self.source_transform_key,
                     matrix_size=matrix_size)
                 file_times.append(time.time() - start)
+                file_cpu_times.append(time.thread_time() - cpu_start)
                 return source
 
             # matrix_size is decided once from the first source (matching the previous
@@ -522,15 +522,8 @@ class MVSRegistration:
                             pbar.update(1)
 
         if self.logging_time and file_times:
-            wall_time = time.time() - phase_start
-            total_time = sum(file_times)
-            # wall_time close to total_time (despite max_workers > 1) points to GIL-bound work
-            # (e.g. Python-level tag/XML parsing) that more threads won't fix; wall_time well
-            # below total_time confirms it's I/O-wait being usefully overlapped instead, where
-            # more workers (default_source_init_workers) could still help
-            logging.info(f'Init sources: {len(file_times)} files with {max_workers} workers, '
-                        f'wall {wall_time:.1f}s, per-file total {total_time:.1f}s '
-                        f'(mean {1000 * total_time / len(file_times):.0f}ms, max {1000 * max(file_times):.0f}ms)')
+            logging.info(f'Init sources: {len(file_times)} files'
+                         f' {format_phase_timing(time.time() - phase_start, file_times, file_cpu_times, max_workers)}')
 
     def init_data(self, source_metadata={}, extra_metadata={}, z_scale=None, target_scale=None, store=True,
                   progress_factory=None):

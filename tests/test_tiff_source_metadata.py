@@ -185,11 +185,12 @@ def test_source_matches_the_reference_end_to_end(tmp_path):
             assert got[dim] == pytest.approx(want[dim])
 
 
-def test_multi_image_ome_xml_costs_the_same_as_a_small_one():
-    """The reason this exists: a multi-file OME-TIFF carries the whole dataset's XML per file."""
-    import time
-
-    def xml(count):
+def test_multi_image_ome_xml_parsing_stops_once_settled():
+    """The reason this exists: a multi-file OME-TIFF carries the whole dataset's XML per file,
+    so the parse must not scale with it. Proven structurally rather than by the clock (a
+    wall-time bound is flaky under load): the document is malformed well past the first fed
+    chunk, so reaching the end would raise."""
+    def xml(count, tail=''):
         images = ''.join(
             f'<Image ID="Image:{i}"><Pixels ID="Pixels:{i}" Type="uint16" SizeX="64" SizeY="64"'
             f' SizeC="1" SizeZ="1" SizeT="1" PhysicalSizeX="0.5" PhysicalSizeY="0.5">'
@@ -197,21 +198,16 @@ def test_multi_image_ome_xml_costs_the_same_as_a_small_one():
             f'<Plane TheC="0" TheZ="0" TheT="0" PositionX="{i}.0" PositionY="0.0"/>'
             f'</Pixels></Image>' for i in range(count))
         return ('<?xml version="1.0"?><OME xmlns="http://www.openmicroscopy.org/Schemas/OME/'
-                f'2016-06">{images}</OME>')
+                f'2016-06">{images}{tail}</OME>')
 
-    small, large = xml(2), xml(4733)
+    small = xml(2)
+    large = xml(4000, tail='<Unclosed>' * 5 + '<<<not xml&&&')
+    assert len(large) > 512 * 1024
 
-    # scale and channels come from the first Image either way; position is voided for multi-Image
+    # scale and channels come from the first Image either way; position is voided for
+    # multi-Image - and the malformed tail is never reached, so nothing raises
     for document in (small, large):
         metadata = extract_ome_image_metadata(document)
         assert metadata['scale'] == {'x': 0.5, 'y': 0.5}
         assert metadata['channel_names'] == ['ch0']
         assert metadata['position'] == {}
-
-    def timed(document, repeats=20):
-        start = time.perf_counter()
-        for _ in range(repeats):
-            extract_ome_image_metadata(document)
-        return (time.perf_counter() - start) / repeats
-
-    assert timed(large) < max(timed(small) * 5, 0.003)
