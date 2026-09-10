@@ -85,3 +85,4 @@ venv/
 
 /log
 /output
+/output_zarr
