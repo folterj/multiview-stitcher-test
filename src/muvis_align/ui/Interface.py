@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager, nullcontext
 import logging
 from enum import Enum, auto
 from magicclass.ext.napari import ViewerWidget
@@ -29,7 +30,7 @@ from muvis_align.metrics import calc_msims_metrics
 from muvis_align.Timer import Timer
 from muvis_align.ui.NapariDaskProgress import NapariDaskProgress
 from muvis_align.ui.NapariMVSProgress import NapariMVSProgress
-from muvis_align.ui.NapariPreprocessProgress import NapariPreprocessProgress
+from muvis_align.ui.NapariPhaseProgress import NapariPhaseProgress
 from muvis_align.ui.ParamWidget import create_dict_of_lists, update_dict_value
 from muvis_align.ui._utils import TemporarilyDisabledWidgets, VisibleActivityDock, catch_run_errors
 from muvis_align.ui.bilayers_util import get_section_dict
@@ -244,20 +245,26 @@ class Interface:
             if not output.endswith('/'):
                 output += '/'
             input_path = resolve_to_project_dir(params['input_path'], project_dir)
-            ok = self.reg.init(input_path=eval_path(input_path),
-                               output_path=output,
-                               overwrite=params['overwrite'],
-                               verbose=self.verbose)
-            if ok:
-                # init_progress(), right below, always ends by drawing the view (with
-                # whatever transform its own registration-state check picks) - drawing here
-                # too would just draw once with the not-yet-registered transform, immediately
-                # thrown away by that second, correct draw.
-                ok = self.update_metadata_source(skip_view_update=True)
+            # one bar for opening the project - reading the sources and loading any saved
+            # registration. It finishes before the view work starts, which shows the one bar
+            # after it (see _show_loaded_project(), _operation_progress())
+            with self._operation_progress('Initialising sources', phases=4) as factory:
+                ok = self.reg.init(input_path=eval_path(input_path),
+                                   output_path=output,
+                                   overwrite=params['overwrite'],
+                                   verbose=self.verbose)
                 if ok:
-                    self.populate_image_selection()
-                    self.init_progress()
-            if not ok:
+                    # _show_loaded_project(), below, always ends by drawing the view (with
+                    # whatever transform its own registration-state check picks) - drawing here
+                    # too would just draw once with the not-yet-registered transform, immediately
+                    # thrown away by that second, correct draw.
+                    ok = self.update_metadata_source(skip_view_update=True, progress_factory=factory)
+                    if ok:
+                        self.populate_image_selection()
+                        self._load_saved_progress(factory)
+            if ok:
+                self._show_loaded_project()
+            else:
                 show_warning('Invalid input or output')
                 self.reg.state = RegState.UNINIT
         elif self.reg.is_global_registered():
@@ -267,28 +274,81 @@ class Interface:
         else:
             self.update_metadata_source()
 
+    @contextmanager
+    def _operation_progress(self, desc, progress_factory=None, phases=1):
+        """Progress reporting for one user-facing operation: the activity dock, disabled widgets,
+        and a single NapariPhaseProgress bar that every phase of the operation reports into (see
+        NapariPhaseProgress - phases name themselves in its description rather than each opening
+        a bar of their own).
+
+        There is never more than one bar: an operation that runs inside another (the caller
+        passed its factory, or one is simply already running) reports into that one and leaves
+        the dock and the widget state to it.
+
+        Computing and then showing the result are deliberately kept as two operations, in that
+        order - one bar for the work (pre-processing, registration, fusion, opening a project),
+        which finishes and disappears, and then one for building and drawing the view.
+
+        `phases` is how many phases the operation expects to report - it sizes their slices of
+        the one bar, which fills once from empty to full (see NapariPhaseProgress); being out
+        by one only makes the bar move unevenly, never wrong.
+        """
+        factory = progress_factory or getattr(self, '_running_operation', None)
+        if factory is not None:
+            yield factory
+            return
+        with NapariPhaseProgress(progress_class=progress, desc=desc, phases=phases,
+                                 min_duration=0.1) as factory, \
+             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
+             VisibleActivityDock(self.viewer):
+            self._running_operation = factory
+            try:
+                yield factory
+            finally:
+                self._running_operation = None
+
     def init_progress(self):
+        # the two halves of opening a project, each its own bar, one after the other
+        with self._operation_progress('Initialising sources', phases=3) as progress_factory:
+            self._load_saved_progress(progress_factory)
+        self._show_loaded_project()
+
+    def _load_saved_progress(self, progress_factory=None):
         output_filename = operation_to_past_participle(self.params['registration']['operation'])
-        self.reg.init_progress(output_filename, zarr_extension)
-        if self.reg.is_pairs_registered() and self.reg.register_msims is None:
-            # reg.init_progress() can load a previously-saved pair registration from disk (a
-            # reloaded project) - in that branch it sets pair_msims straight from
-            # self.reg.msims, the raw full pyramid, bypassing the scale-reduction a live
-            # pair-registration run always applies first (preprocess()'s
-            # select_msim_subpyramid_at_scale). Left unprocessed, a later global
-            # registration's metrics computation can auto-select the full-resolution level
-            # and run out of memory. Run the same preprocessing now and re-point pair_msims
-            # at its result, matching what a fresh run would have produced.
-            self.run_pre_processing()
-            self.reg.pair_msims = self.reg.register_msims
+        # Resuming a saved project does real work: reg.init_progress() forces the per-source
+        # msim build (~15s for 328 sources) and loads/redimensions the saved registration, and
+        # a reloaded pair registration has to be re-preprocessed.
+        with self._operation_progress('Initialising sources', progress_factory,
+                                      phases=3) as progress_factory:
+            self.reg.init_progress(output_filename, zarr_extension, progress_factory=progress_factory)
+            if self.reg.is_pairs_registered() and self.reg.register_msims is None:
+                # reg.init_progress() can load a previously-saved pair registration from disk (a
+                # reloaded project) - in that branch it sets pair_msims straight from
+                # self.reg.msims, the raw full pyramid, bypassing the scale-reduction a live
+                # pair-registration run always applies first (preprocess()'s
+                # select_msim_subpyramid_at_scale). Left unprocessed, a later global
+                # registration's metrics computation can auto-select the full-resolution level
+                # and run out of memory. Run the same preprocessing now and re-point pair_msims
+                # at its result, matching what a fresh run would have produced.
+                self.run_pre_processing(progress_factory=progress_factory)
+                self.reg.pair_msims = self.reg.register_msims
+
+    def _show_loaded_project(self):
+        # building the view data and drawing it - the second bar of opening a project, shown
+        # once the load above has finished
         if self.reg.is_fused():
-            copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
-            self.preview_fusion()
+            with self._operation_progress('Refreshing view', phases=2) as view_factory:
+                self._copy_transforms_to_view_msims(self.reg.reg_transform_key,
+                                                    progress_factory=view_factory)
+                self.preview_fusion(progress_factory=view_factory)
             self.enable_tabs(True, 4)
             self.select_tab(4)
         elif self.reg.is_global_registered():
-            copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
-            self.update_registered(view_transform_key=self.reg.reg_transform_key)
+            with self._operation_progress('Refreshing view', phases=2) as view_factory:
+                self._copy_transforms_to_view_msims(self.reg.reg_transform_key,
+                                                    progress_factory=view_factory)
+                self.update_registered(view_transform_key=self.reg.reg_transform_key,
+                                       progress_factory=view_factory)
             self.enable_tabs(True, 4)
             self.select_tab(4)
         elif self.reg.is_pairs_registered():
@@ -303,18 +363,14 @@ class Interface:
             self.update_views(show_images=False)
             self.enable_tabs(True, 2)
 
-    def update_metadata_source(self, skip_view_update=False):
+    def update_metadata_source(self, skip_view_update=False, progress_factory=None):
         if not self.reg.is_pairs_registered():
             try:
-                with NapariPreprocessProgress(progress_class=progress,
-                                              desc='Initialising sources',
-                                              bar_format=" ",
-                                              min_duration=0.1) as progress_factory, \
-                     TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                     VisibleActivityDock(self.viewer):
+                with self._operation_progress('Initialising sources',
+                                              progress_factory) as factory:
                     self.reg.init_data(
                         source_metadata=self.source_metadata,
-                        progress_factory=progress_factory,
+                        progress_factory=factory,
                     )
             except ValueError as e:
                 show_warning('Unable to read source data\n' + str(e))
@@ -348,6 +404,9 @@ class Interface:
             self.populate_metadata_table(None)
             self.check_3d_view()
             if not skip_view_update:
+                # no factory: by here the source initialisation above has finished, and drawing
+                # the view is the next operation (or a phase of the caller's, if one is still
+                # running - see _operation_progress())
                 self.update_views(show_images=False)
 
         return True
@@ -357,44 +416,65 @@ class Interface:
         # per-source msim for the napari image data layer - built lazily, only once something
         # (the fused image preview) actually needs it; shapes no longer depend on this at all
         # (see _create_napari_shapes(), which builds its own cheap per-source sims directly)
+        return self.ensure_view_msims()
+
+    def ensure_view_msims(self, progress_factory=None):
+        # same lazy build the view_msims property triggers, but callable ahead of time with a
+        # progress_factory - lets a caller that is about to force it (see
+        # _copy_transforms_to_view_msims()) report it per source instead of it happening
+        # silently inside an argument expression, mirroring MVSRegistration.ensure_msims()
         if self._view_msims is None:
-            self._view_msims = self._build_view_msims()
+            self._view_msims = self._build_view_msims(progress_factory=progress_factory)
             if len(set(position.get('z', 0) for position in self.reg.positions)) > 1:
                 self._view_msims = make_msims_3d(self._view_msims, positions=self.reg.positions)
         return self._view_msims
+
+    def _copy_transforms_to_view_msims(self, transform_key, progress_factory=None):
+        # forcing view_msims builds one msim per source (and, for a multi-z set, wraps the whole
+        # lot into a volume) - seconds to tens of seconds for a few hundred sources, so report it
+        # rather than letting it run silently as a side effect of an argument expression
+        with self._operation_progress('Building views', progress_factory) as factory:
+            view_msims = self.ensure_view_msims(progress_factory=factory)
+        copy_transforms_to_msims(self.reg.msims, view_msims, transform_key)
 
     @view_msims.setter
     def view_msims(self, value):
         self._view_msims = value
 
-    def _build_view_msims(self):
+    def _build_view_msims(self, progress_factory=None):
         # per-source msim for the napari image data layer: a source with a native multi-
         # resolution pyramid is used as-is; a single-resolution source is downscaled by one
         # constant factor when its largest spatial dimension exceeds 1000px
         view_msims = []
-        for source, msim in zip(self.reg.sources, self.reg.msims):
-            if len(source.shapes) == 1:
-                image0 = get_msim_image0(msim)
-                spatial_dims = si_utils.get_spatial_dims_from_sim(image0)
-                largest_dim = max(image0.sizes[dim] for dim in spatial_dims)
-                if largest_dim > 1000:
-                    scale_factor = largest_dim / 1000
-                    sim = extract_sims_from_msims(
-                        [msim], [source], self.reg.source_transform_key, target_scale=scale_factor
-                    )[0]
-                    msim = wrap_sims_as_msims([sim])[0]
-            view_msims.append(msim)
+        progress_context = (
+            progress_factory(total=len(self.reg.sources), desc='Building views')
+            if progress_factory is not None
+            else nullcontext(None)
+        )
+        with progress_context as pbar:
+            for source, msim in zip(self.reg.sources, self.reg.msims):
+                if len(source.shapes) == 1:
+                    image0 = get_msim_image0(msim)
+                    spatial_dims = si_utils.get_spatial_dims_from_sim(image0)
+                    largest_dim = max(image0.sizes[dim] for dim in spatial_dims)
+                    if largest_dim > 1000:
+                        scale_factor = largest_dim / 1000
+                        sim = extract_sims_from_msims(
+                            [msim], [source], self.reg.source_transform_key, target_scale=scale_factor
+                        )[0]
+                        msim = wrap_sims_as_msims([sim])[0]
+                view_msims.append(msim)
+                if pbar is not None:
+                    pbar.update(1)
         return view_msims
 
     @catch_run_errors
-    def run_pre_processing(self):
+    def run_pre_processing(self, progress_factory=None):
         params_features = self.params['pre_processing']
-        with NapariPreprocessProgress(progress_class=progress,
-                                      desc='Pre-processing',
-                                      bar_format=" ",
-                                      min_duration=0.1) as progress_factory, \
-             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer), \
+        # both phases below (per-source msim build, then pre-processing itself) report into the
+        # one bar this opens - or into the caller's, when pre-processing is a phase of a larger
+        # operation such as loading a saved project
+        with self._operation_progress('Pre-processing', progress_factory, phases=2) as progress_factory, \
              Timer('pre_processing_process', verbose=self._timing_verbose()):
             # self.reg.msims is built lazily (see MVSRegistration.msims) - building it here
             # explicitly, through ensure_msims(), gives that per-source construction its own
@@ -410,6 +490,8 @@ class Interface:
         return True
 
     def pre_processing_process(self):
+        # pre-processing reports its own bar, then the view it leaves on screen reports a second
+        # one of its own (update_views()) - the work and showing the result are two operations
         if not self.run_pre_processing():
             return
         self.update_views(show_preprocessed=True)
@@ -513,36 +595,53 @@ class Interface:
         # rather than requiring self.reg just to gate these diagnostic Timer() calls
         return getattr(getattr(self, 'reg', None), 'logging_time', False)
 
-    def update_views(self, transform_key=None, show_preprocessed=False, show_images=True):
+    def update_views(self, transform_key=None, show_preprocessed=False, show_images=True,
+                     progress_factory=None):
         if transform_key is None:
             transform_key = self.get_best_transform_key()
 
         is_3d = (self.reg.sources[0].get_size().get('z', 0) > 1)
         is_multi_z_shapes = (len(set(position.get('z', 0) for position in self.reg.positions)) > 1)
         force_2d = is_multi_z_shapes and not is_3d
-        with Timer('update_views: create shapes', verbose=self._timing_verbose()):
-            shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=force_2d)
 
-        self._clear_napari_view(self.viewer)
-        # before pre-processing has run, only shapes are ever shown (show_images=False) - the
-        # fused image preview always needs every source's real msim built (see
-        # _create_napari_data()), so showing it only once pre-processing/registration has
-        # actually happened is also what keeps that cost from ever blocking initial project load
-        if show_images:
-            with Timer('update_views: create fused data', verbose=self._timing_verbose()):
-                data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
-            if data is not None:
-                with Timer('update_views: add fused data to viewer', verbose=self._timing_verbose()):
-                    # cheap=True: this is the general overview, not the accurate fusion-tab
-                    # preview (preview_fusion()) or the real exported result (fusion_process())
-                    # - a naive contrast guess is fine here, see _napari_view_add_fused_data()
-                    self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data',
-                                                     cheap=True)
-        with Timer('update_views: add shapes to viewer', verbose=self._timing_verbose()):
-            self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
+        # The whole refresh is one phase, counted in the steps below - a refresh of a few
+        # hundred images takes tens of seconds on the Qt thread (the fused preview dominating
+        # it, but none of the steps being instant), and without this all of that looked like a
+        # frozen window. The steps are equal-weight, so the bar moves unevenly; it says the view
+        # is being refreshed and roughly how far along that is, which is all there is to follow.
+        steps = 3 if not show_images else 5
 
-        with Timer('update_views: refresh overview shapes', verbose=self._timing_verbose()):
-            self._refresh_overview_shapes(transform_key, shapes, refs, labels, face_colors, is_3d=is_3d)
+        with self._operation_progress('Refreshing view', progress_factory) as factory, \
+             factory(total=steps) as pbar:
+            with Timer('update_views: create shapes', verbose=self._timing_verbose()):
+                shapes, refs, labels, face_colors = self._create_napari_shapes(transform_key, force_2d=force_2d)
+            pbar.update(1)
+
+            self._clear_napari_view(self.viewer)
+            # before pre-processing has run, only shapes are ever shown (show_images=False) - the
+            # fused image preview always needs every source's real msim built (see
+            # _create_napari_data()), so showing it only once pre-processing/registration has
+            # actually happened is also what keeps that cost from ever blocking initial project load
+            if show_images:
+                with Timer('update_views: create fused data', verbose=self._timing_verbose()):
+                    data = self._create_napari_data(transform_key, show_preprocessed=show_preprocessed)
+                pbar.update(1)
+                if data is not None:
+                    with Timer('update_views: add fused data to viewer', verbose=self._timing_verbose()):
+                        # cheap=True: this is the general overview, not the accurate fusion-tab
+                        # preview (preview_fusion()) or the real exported result (fusion_process())
+                        # - a naive contrast guess is fine here, see _napari_view_add_fused_data()
+                        self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data',
+                                                         cheap=True)
+                pbar.update(1)
+
+            with Timer('update_views: add shapes to viewer', verbose=self._timing_verbose()):
+                self._update_view_add_shapes(self.viewer, shapes, refs, labels, face_colors, f'{self.reg.fileset_label} shapes')
+            pbar.update(1)
+
+            with Timer('update_views: refresh overview shapes', verbose=self._timing_verbose()):
+                self._refresh_overview_shapes(transform_key, shapes, refs, labels, face_colors, is_3d=is_3d)
+            pbar.update(1)
         self.view_mode = ViewMode.OVERVIEW
 
     def _refresh_overview_shapes(self, transform_key, shapes=None, refs=None, labels=None,
@@ -912,48 +1011,51 @@ class Interface:
         self.populate_metrics_table(metrics)
 
     @catch_run_errors
-    def run_preview_registration(self):
+    def run_preview_registration(self, progress_factory=None):
         label1 = self.param_widgets.get('registration.reg_preview_image1').get_value()
         label2 = self.param_widgets.get('registration.reg_preview_image2').get_value()
         index1 = self.reg.file_labels.index(label1)
         index2 = self.reg.file_labels.index(label2)
 
+        # as in run_pair_registration(): pre-processing gets its own bar, before this one
         if not self.reg.register_msims:
-            if not self.run_pre_processing():
+            if not self.run_pre_processing(progress_factory=progress_factory):
                 return None
-        with NapariDaskProgress(progress_class=progress, desc='Preview registration'), \
-                TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                VisibleActivityDock(self.viewer):
-            registration_params = self.params['registration']
-            channel = registration_params.get('channel')
-            cache = self._preview_overlap_cache
-            # the overlap crop only depends on the source data (register_msims - a new list
-            # object every time pre-processing actually re-runs) and which pair/channel is
-            # selected, never on the registration method or its tuning parameters - reuse it
-            # across parameter-only changes instead of re-cropping from the (possibly large)
-            # source data every time
-            if (cache is not None and cache['register_msims'] is self.reg.register_msims
-                    and cache['index1'] == index1 and cache['index2'] == index2
-                    and cache['channel'] == channel):
-                overlap1, overlap2, sims_pixel_space = cache['overlap1'], cache['overlap2'], cache['sims_pixel_space']
-            else:
+
+        with self._operation_progress('Preview registration', progress_factory, phases=2) as factory:
+            # dask's own task counting reports as one more phase of this bar (progress_class),
+            # rather than as a bar of its own
+            with NapariDaskProgress(progress_class=factory, desc='Preview registration'):
+                registration_params = self.params['registration']
+                channel = registration_params.get('channel')
+                cache = self._preview_overlap_cache
+                # the overlap crop only depends on the source data (register_msims - a new list
+                # object every time pre-processing actually re-runs) and which pair/channel is
+                # selected, never on the registration method or its tuning parameters - reuse it
+                # across parameter-only changes instead of re-cropping from the (possibly large)
+                # source data every time
+                if (cache is not None and cache['register_msims'] is self.reg.register_msims
+                        and cache['index1'] == index1 and cache['index2'] == index2
+                        and cache['channel'] == channel):
+                    overlap1, overlap2, sims_pixel_space = cache['overlap1'], cache['overlap2'], cache['sims_pixel_space']
+                else:
+                    msim1, msim2 = self.reg.register_msims[index1], self.reg.register_msims[index2]
+                    overlap1, overlap2, sims_pixel_space = self.reg.select_pair_overlap(
+                        msim1, msim2, params=registration_params)
+                    overlap1, overlap2 = overlap1.compute(), overlap2.compute()
+                    self._preview_overlap_cache = {
+                        'register_msims': self.reg.register_msims,
+                        'index1': index1, 'index2': index2, 'channel': channel,
+                        'overlap1': overlap1, 'overlap2': overlap2, 'sims_pixel_space': sims_pixel_space,
+                    }
+
+                transform, quality, results = self.reg.register_overlap(
+                    overlap1, overlap2, sims_pixel_space, params=registration_params)
+
                 msim1, msim2 = self.reg.register_msims[index1], self.reg.register_msims[index2]
-                overlap1, overlap2, sims_pixel_space = self.reg.select_pair_overlap(
-                    msim1, msim2, params=registration_params)
-                overlap1, overlap2 = overlap1.compute(), overlap2.compute()
-                self._preview_overlap_cache = {
-                    'register_msims': self.reg.register_msims,
-                    'index1': index1, 'index2': index2, 'channel': channel,
-                    'overlap1': overlap1, 'overlap2': overlap2, 'sims_pixel_space': sims_pixel_space,
-                }
-
-            transform, quality, results = self.reg.register_overlap(
-                overlap1, overlap2, sims_pixel_space, params=registration_params)
-
-            msim1, msim2 = self.reg.register_msims[index1], self.reg.register_msims[index2]
-            transforms = {(0, 1): transform}
-            qualities = {(0, 1): quality}
-            metrics = calc_msims_metrics((msim1, msim2), transforms, qualities, metric_methods=self.metrics_methods)
+                transforms = {(0, 1): transform}
+                qualities = {(0, 1): quality}
+                metrics = calc_msims_metrics((msim1, msim2), transforms, qualities, metric_methods=self.metrics_methods)
 
         return metrics, results, overlap1, overlap2
 
@@ -1037,13 +1139,13 @@ class Interface:
                     table_cell.setBackground(
                         QColor(*metric_to_rgb(metrics_table[rowi][coli], max_light=0.5, output_range=255)))
 
-    def update_registered(self, view_transform_key=None):
+    def update_registered(self, view_transform_key=None, progress_factory=None):
         msims = self.reg.msims
         coord_systems = get_transforms(msims)
         self.populate_coordinate_systems(coord_systems)
         self.populate_metadata_table(msims)
         self.populate_metrics_table(self.reg.metrics)
-        self.update_views(transform_key=view_transform_key)
+        self.update_views(transform_key=view_transform_key, progress_factory=progress_factory)
 
     def enable_modify_pair_registration(self, enabled=True):
         widget = self.param_widgets.get('registration.modify_pair_registration')
@@ -1051,18 +1153,19 @@ class Interface:
             widget.widget.enabled = enabled
 
     @catch_run_errors
-    def run_pair_registration(self):
+    def run_pair_registration(self, progress_factory=None):
+        # pre-processing, when this is what triggers it, reports its own bar and finishes before
+        # the registration's starts - rather than taking a share of the registration's bar
         if not self.reg.register_msims:
-            if not self.run_pre_processing():
+            if not self.run_pre_processing(progress_factory=progress_factory):
                 return None
 
-        with NapariMVSProgress(tqdm_class=progress, patch_registration=True), \
-                NapariDaskProgress(progress_class=progress, desc='Pair registration'), \
-                TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                VisibleActivityDock(self.viewer), \
-                Timer('pair registration', verbose=self._timing_verbose()):
-            results = self.reg.register_pairs(self.reg.register_msims,
-                                              params=self.params['registration'] | {'metrics': self.metrics_methods})
+        with self._operation_progress('Pair registration', progress_factory, phases=2) as factory:
+            with NapariMVSProgress(tqdm_class=factory.tqdm_class, patch_registration=True), \
+                    NapariDaskProgress(progress_class=factory, desc='Pair registration'), \
+                    Timer('pair registration', verbose=self._timing_verbose()):
+                results = self.reg.register_pairs(self.reg.register_msims,
+                                                  params=self.params['registration'] | {'metrics': self.metrics_methods})
 
         qualities = {key: metric[default_transform_key][default_quality_key]
                      for key, metric in results['metrics']['pairs'].items()
@@ -1077,10 +1180,9 @@ class Interface:
         return results
 
     @catch_run_errors
-    def run_global_registration(self):
-        with NapariDaskProgress(progress_class=progress, desc='Global registration'), \
-                TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-                VisibleActivityDock(self.viewer), \
+    def run_global_registration(self, progress_factory=None):
+        with self._operation_progress('Global registration', progress_factory) as factory, \
+                NapariDaskProgress(progress_class=factory, desc='Global registration'), \
                 Timer('global registration', verbose=self._timing_verbose()):
             results = self.reg.register_global(self.reg.pair_msims,
                                                register_indices=self.reg.register_indices,
@@ -1206,27 +1308,35 @@ class Interface:
         reply = QMessageBox.question(None, 'muvis-align', message,
                                      QMessageBox.Yes|QMessageBox.No)
         if reply == QMessageBox.Yes:
+            # a bar per registration - pair, then global - each finishing before the next
+            # starts. One bar over both would have the pair phases fill it, leaving the global
+            # registration (just as long, and the only thing still running) with nothing to show
             with Timer('registration process', verbose=self._timing_verbose()):
                 if not self.reg.is_pairs_registered():
                     if not self.run_pair_registration():
                         return
                 if not self.run_global_registration():
                     return
-            copy_transforms_to_msims(self.reg.msims, self.view_msims, self.reg.reg_transform_key)
-            self.update_registered(view_transform_key=self.reg.reg_transform_key)
+            # ...and one more for building and drawing the view they leave on screen
+            with self._operation_progress('Refreshing view', phases=2) as view_factory:
+                self._copy_transforms_to_view_msims(self.reg.reg_transform_key,
+                                                    progress_factory=view_factory)
+                self.update_registered(view_transform_key=self.reg.reg_transform_key,
+                                       progress_factory=view_factory)
             self.enable_tabs(True, 4)
             QMessageBox.information(None, 'muvis-align', completion_message)
 
     @catch_run_errors
-    def preview_fusion(self):
+    def preview_fusion(self, progress_factory=None):
         transform_key = self.reg.reg_transform_key
-        with NapariMVSProgress(tqdm_class=progress, desc='Fusion', patch_fusion=True), \
-             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer):
+        with self._operation_progress('Fusion preview', progress_factory, phases=2) as factory, \
+             NapariMVSProgress(tqdm_class=factory.tqdm_class, desc='Fusion', patch_fusion=True), \
+             factory(total=2) as pbar:
             data = self._create_napari_data(transform_key, fusion_method=self.params['fusion']['method'])
-        self._clear_napari_view(self.viewer)
-        self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
-        self.view_mode = ViewMode.FUSED
+            pbar.update(1)
+            self._clear_napari_view(self.viewer)
+            self._napari_view_add_fused_data(self.viewer, data, f'{self.reg.fileset_label} data')
+            self.view_mode = ViewMode.FUSED
         # preview_fusion() is also what a resumed already-fused project draws (init_progress's
         # is_fused() branch) - unlike every other init_progress branch, it never otherwise goes
         # through update_views(), so the overview would stay empty without this
@@ -1237,19 +1347,12 @@ class Interface:
         operation = self.params['registration']['operation']
         output_folder = operation_to_past_participle(operation)
         ome_version = self.params['fusion']['ome_version']
-        with NapariPreprocessProgress(progress_class=progress, desc='Initialising sources',
-                                      bar_format=" ", min_duration=0.1) as progress_factory, \
-             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer):
+        # source build and conversion are two phases of one operation, so they share one bar
+        with self._operation_progress('Converting', phases=2) as progress_factory, \
+             Timer('convert', verbose=self._timing_verbose()):
             # see run_pre_processing() - builds msims with its own progress reporting instead of
             # silently as a side effect of the save loop below
             msims = self.reg.ensure_msims(progress_factory=progress_factory)
-
-        with NapariPreprocessProgress(progress_class=progress, desc='Converting',
-                                      min_duration=0.1) as progress_factory, \
-             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer), \
-             Timer('convert', verbose=self._timing_verbose()):
             # MVSRegistration.fuse() isn't used here - even its 'compose' fusion_method still
             # builds one shared output_stack_properties canvas across every source first (wasted
             # work no per-source file needs), and is_channel_overlay would still combine sources
@@ -1281,7 +1384,7 @@ class Interface:
         return True
 
     @catch_run_errors
-    def run_fusion(self):
+    def run_fusion(self, progress_factory=None):
         operation = self.params['registration']['operation']
         output_filename = operation_to_past_participle(operation)
         tile_size = self.params['fusion']['tile_size']
@@ -1289,9 +1392,8 @@ class Interface:
             tile_size = [int(size.strip()) for size in tile_size.split(',')]
         elif isinstance(tile_size, str):
             tile_size = int(tile_size.strip())
-        with NapariMVSProgress(tqdm_class=progress, desc='Fusion', patch_fusion=True), \
-             TemporarilyDisabledWidgets(self.enable_plugin_widget), \
-             VisibleActivityDock(self.viewer), \
+        with self._operation_progress('Fusion', progress_factory) as factory, \
+             NapariMVSProgress(tqdm_class=factory.tqdm_class, desc='Fusion', patch_fusion=True), \
              Timer('fusion', verbose=self._timing_verbose()):
             fused_image, is_saved = self.reg.fuse(self.reg.msims,
                                                   fusion_method=self.params['fusion']['method'],
@@ -1322,8 +1424,11 @@ class Interface:
             fused_image = self.run_fusion()
             if fused_image is None:
                 return
-            self._clear_napari_view(self.viewer)
-            self._napari_view_add_fused_data(self.viewer, fused_image, 'Fused')
+            # the export reported its own bar; drawing the result reports a second one
+            with self._operation_progress('Refreshing view') as factory, \
+                 factory(total=1):
+                self._clear_napari_view(self.viewer)
+                self._napari_view_add_fused_data(self.viewer, fused_image, 'Fused')
             self.reg.state = RegState.FUSED
             self.view_mode = ViewMode.FUSED
             QMessageBox.information(None, 'muvis-align', 'Fusion completed')

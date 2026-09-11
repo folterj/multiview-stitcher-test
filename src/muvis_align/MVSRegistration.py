@@ -696,14 +696,22 @@ class MVSRegistration:
         elif os.path.exists(pair_mappings_filename):
             self.state = RegState.PAIRS_REG
 
-    def init_progress(self, output_filename, output_format):
+    def init_progress(self, output_filename, output_format, progress_factory=None):
         pair_mappings_filename = self.output + self.output_params.get('pair_mappings', default_pair_mappings_name)
         mappings_filename = self.output + self.output_params.get('mappings', default_mappings_name)
         metrics_filename = self.output + metrics_name
         is_3d = (self.sources[0].get_size().get('z', 0) > 1)
         self.check_progress(output_filename, output_format)
 
-        if self.is_pairs_registered() and os.path.exists(pair_mappings_filename):
+        load_pairs = self.is_pairs_registered() and os.path.exists(pair_mappings_filename)
+        if load_pairs or self.is_global_registered():
+            # both branches below read self.msims, whose lazy build is the single most expensive
+            # thing resuming a saved project does (~15s for 328 sources) - build it here, through
+            # ensure_msims(), so a caller's progress_factory can report it per source instead of
+            # it happening silently inside the first plain `self.msims` expression further down
+            self.ensure_msims(progress_factory=progress_factory)
+
+        if load_pairs:
             # load pair mapping and initialise pair_graph
             logging.info(f'Loading pair mapping from {pair_mappings_filename}')
             pairs = import_json(pair_mappings_filename)
@@ -720,21 +728,34 @@ class MVSRegistration:
                     indexed_qualities[indexed_key] = np.array(value.get(default_quality_key, 0))
                     if 'bbox' in value:
                         indexed_bboxes[indexed_key] = xr.DataArray(value['bbox'])
-            if not is_3d:
-                self.msims = make_msims_2d(self.msims)
-            self.pair_msims = self.msims
-            self.pairs = list(indexed_pair_transforms.keys())
-            self.metrics = {
-                'summary': {default_transform_key: {default_quality_key: np.mean(list(indexed_qualities.values()))}},
-                'pairs': {key: {default_transform_key: {default_quality_key: value.item()}}
-                          for key, value in indexed_qualities.items()}
-            }
-            with dask.config.set(scheduler='single-threaded'):
-                self.pairs_graph = mv_graph.build_view_adjacency_graph_from_msims(
-                    self.pair_msims,
-                    transform_key=self.source_transform_key,
-                    pairs=self.pairs
-                )
+            # neither of the two steps left is per-source-divisible (a whole-set redimension and
+            # one graph build over every pair), but together they are seconds to tens of seconds
+            # for a few hundred sources - count them rather than letting them run silently
+            progress_context = (
+                progress_factory(total=2, desc='Loading pair registration')
+                if progress_factory is not None
+                else nullcontext(None)
+            )
+            with progress_context as pbar:
+                if not is_3d:
+                    self.msims = make_msims_2d(self.msims)
+                self.pair_msims = self.msims
+                self.pairs = list(indexed_pair_transforms.keys())
+                self.metrics = {
+                    'summary': {default_transform_key: {default_quality_key: np.mean(list(indexed_qualities.values()))}},
+                    'pairs': {key: {default_transform_key: {default_quality_key: value.item()}}
+                              for key, value in indexed_qualities.items()}
+                }
+                if pbar is not None:
+                    pbar.update(1)
+                with dask.config.set(scheduler='single-threaded'):
+                    self.pairs_graph = mv_graph.build_view_adjacency_graph_from_msims(
+                        self.pair_msims,
+                        transform_key=self.source_transform_key,
+                        pairs=self.pairs
+                    )
+                if pbar is not None:
+                    pbar.update(1)
             nx.set_edge_attributes(self.pairs_graph, indexed_pair_transforms, default_transform_key)
             nx.set_edge_attributes(self.pairs_graph, indexed_qualities, default_quality_key)
             nx.set_edge_attributes(self.pairs_graph, indexed_bboxes, 'bbox')
@@ -753,14 +774,22 @@ class MVSRegistration:
             # the persistent pyramid needs the same transform a fresh registration run would have
             # written via register_global, or copy_transforms/get_transforms downstream
             # (Interface.py) won't find it there when resuming from saved state
-            for msim, filename in zip(self.msims, self.filenames):
-                mapping = param_utils.affine_to_xaffine(np.array(find_file_dict_item(mappings, filename)))
-                if make_3d:
-                    transform = param_utils.identity_transform(ndim=3)
-                    transform.loc[{dim: mapping.coords[dim] for dim in mapping.dims}] = mapping
-                else:
-                    transform = mapping
-                msi_utils.set_affine_transform(msim, transform, transform_key=self.reg_transform_key)
+            progress_context = (
+                progress_factory(total=len(self.msims), desc='Loading global registration')
+                if progress_factory is not None
+                else nullcontext(None)
+            )
+            with progress_context as pbar:
+                for msim, filename in zip(self.msims, self.filenames):
+                    mapping = param_utils.affine_to_xaffine(np.array(find_file_dict_item(mappings, filename)))
+                    if make_3d:
+                        transform = param_utils.identity_transform(ndim=3)
+                        transform.loc[{dim: mapping.coords[dim] for dim in mapping.dims}] = mapping
+                    else:
+                        transform = mapping
+                    msi_utils.set_affine_transform(msim, transform, transform_key=self.reg_transform_key)
+                    if pbar is not None:
+                        pbar.update(1)
             if make_3d:
                 self.msims = make_msims_3d(self.msims, z_scale, self.positions)
             elif not is_3d:
