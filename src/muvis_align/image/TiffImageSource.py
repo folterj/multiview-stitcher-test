@@ -1,7 +1,7 @@
 import tifffile
 from ngff_zarr import tiff_file_to_ngff_images, NgffMultiscales
 
-from muvis_align.image.ome_tiff_helper import read_tiff_source_metadata
+from muvis_align.image.ome_tiff_helper import read_tiff_level_arrays, read_tiff_source_metadata
 from muvis_align.util import convert_to_um
 from muvis_align.image.ImageSource import ImageSource
 from muvis_align.image.color_conversion import hexrgb_to_rgba
@@ -15,7 +15,8 @@ class TiffImageSource(ImageSource):
         # OME-TIFF, its XML; read_tiff_source_metadata() takes it straight off tifffile at
         # ~0.7ms per source, against ~8ms to obtain the same values from
         # tiff_file_to_ngff_images() - which gets there by opening tif.aszarr() and wrapping
-        # every pyramid level in a dask array, work nothing has asked for yet.
+        # every pyramid level in a dask array, work nothing has asked for yet (and which
+        # _load_data() then does for itself, without the metadata half).
         metadata = read_tiff_source_metadata(self.filename)
         if metadata is None:
             # ngff_zarr's private axis mapping is unavailable - fall back to letting it do the
@@ -36,12 +37,20 @@ class TiffImageSource(ImageSource):
         self.rotation = 0
 
     def _load_data(self):
-        self._data = self._read_ngff_images()[1]
+        # the arrays come off tifffile's own zarr store (read_tiff_level_arrays), the same route
+        # ngff_zarr takes to them, but without rebuilding the metadata init_metadata() has
+        # already read for itself - ~1.5x cheaper per source. ngff_zarr stays the fallback for
+        # whenever that read declines.
+        datas = read_tiff_level_arrays(self.filename)
+        if datas is None:
+            datas = self._read_ngff_images()[1]
+        self._data = datas
 
     def _read_ngff_images(self):
-        """(ngff_images, per-level arrays) from ngff_zarr - the reference reader, and still what
-        produces the actual arrays. Only the first series is the image itself: later series (if
-        any) are auxiliary (e.g. an embedded thumbnail/label image), not further pyramid levels.
+        """(ngff_images, per-level arrays) from ngff_zarr - the reference reader, and the
+        fallback for both the metadata and the array read. Only the first series is the image
+        itself: later series (if any) are auxiliary (e.g. an embedded thumbnail/label image),
+        not further pyramid levels.
         """
         ngff_image_data1 = tiff_file_to_ngff_images(self.filename, reuse_existing_pyramids=True)[0][1]
         if isinstance(ngff_image_data1, NgffMultiscales):

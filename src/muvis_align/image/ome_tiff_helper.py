@@ -1,17 +1,22 @@
 from xml.etree import ElementTree
 
+import dask.array as da
+import zarr
 from ome_zarr.scale import Scaler
 from tifffile import TiffWriter, tifffile
 
 try:
-    # ngff_zarr's own tifffile-axes -> NGFF-dims mapping, reused rather than reimplemented so a
-    # fast metadata read can never disagree with the arrays ngff_zarr later builds from the same
-    # file. Private, hence guarded: if it moves, read_tiff_source_metadata() declines and the
-    # caller falls back to ngff_zarr itself.
+    # ngff_zarr's own tifffile-axes -> NGFF-dims mapping (and the array reshape that goes with
+    # it), reused rather than reimplemented so a fast metadata or array read can never disagree
+    # with what ngff_zarr itself would build from the same file. Private, hence guarded: if they
+    # move, read_tiff_source_metadata()/read_tiff_level_arrays() decline and the caller falls
+    # back to ngff_zarr itself.
     from ngff_zarr.tiff_to_ngff_image import _map_tiff_axes_to_ngff as map_tiff_axes_to_ngff
     from ngff_zarr.tiff_to_ngff_image import _normalize_unit as normalize_ome_unit
+    from ngff_zarr.tiff_to_ngff_image import _reshape_tiff_for_channels as reshape_tiff_for_channels
 except ImportError:  # pragma: no cover - depends on the installed ngff_zarr
     map_tiff_axes_to_ngff = None
+    reshape_tiff_for_channels = None
 
     def normalize_ome_unit(unit):
         return unit
@@ -166,6 +171,66 @@ def read_tiff_source_metadata(filename):
     return {'dimension_order': ''.join(dims), 'shapes': shapes, 'dtype': dtype,
             'pixel_sizes': pixel_sizes, 'position': (ome or {}).get('position') or {},
             'channels': channels}
+
+
+def read_tiff_level_arrays(filename):
+    """One dask array per pyramid level of the file's first series, opened straight off
+    tifffile's own zarr store. Returns None if it cannot be done faithfully, leaving the caller
+    on ngff_zarr's own path.
+
+    The arrays are the same ones ngff_zarr.tiff_file_to_ngff_images() produces - it reaches them
+    exactly this way (tif.aszarr() -> zarr group -> da.from_zarr per level, then its axis
+    mapping and channel reshape, both reused here) - but without also rebuilding the metadata
+    the source has already read for itself off tifffile, which is what the rest of that call
+    costs. Measured per source: 3.2ms here against 4.7ms for a plain 800x800 tile, 6.6ms against
+    9.8ms for a 4096x4096 4-level pyramid.
+
+    The dask wrapping is deliberate, even though reading pixels off the zarr arrays directly is
+    3-4x faster (37ms vs 129ms for a full 4096x4096 level, 75ms vs 190ms compressed): the whole
+    pipeline downstream is lazy, and a zarr array is not. Slicing one reads immediately, which
+    would turn build_missing_pyramid_levels()' near-free strided subsampling into a full decode
+    at source load, and .data on a zarr-backed sim hands back a materialised numpy array rather
+    than a graph. Handing zarr arrays to multiview_stitcher (which does support them natively)
+    is the larger win, but it is a change to how the whole pipeline reads pixels, not to how a
+    TIFF is opened.
+    """
+    if map_tiff_axes_to_ngff is None or reshape_tiff_for_channels is None:
+        return None
+    with tifffile.TiffFile(filename) as tif:
+        series = tif.series[0]
+        axes = series.axes
+        if not axes:
+            return None
+        # multiscales=True so a single-level file yields a group too, and the levels come back
+        # in the multiscales metadata's own order (highest resolution first) rather than in the
+        # group's arbitrary iteration order
+        group = zarr.open_group(store=tif.aszarr(series=0, multiscales=True), mode='r')
+        attributes = group.attrs.get('ome', group.attrs)
+        try:
+            datasets = attributes['multiscales'][0]['datasets']
+        except (KeyError, IndexError, TypeError):
+            return None
+        arrays = [group[dataset['path']] for dataset in datasets]
+        # tif is closed on the way out: tifffile's store reopens the file itself whenever a
+        # chunk is actually read, so holding a file handle open per source (thousands of them in
+        # a project) buys nothing
+        dims, _, channel_indices, dropped_indices = map_tiff_axes_to_ngff(axes, series.shape)
+
+    datas = []
+    for array in arrays:
+        # the level's shape in NGFF terms (unsupported axes dropped, channel-like axes - 'S'
+        # samples included - flattened onto 'c'), then the array reshaped to match it
+        shape = map_tiff_axes_to_ngff(axes, array.shape)[1]
+        data = da.from_zarr(array)
+        if tuple(data.shape) != tuple(shape):
+            data = reshape_tiff_for_channels(data, axes, tuple(array.shape), dims, tuple(shape),
+                                             list(channel_indices), list(dropped_indices))
+        if tuple(data.shape) != tuple(shape):
+            # the reshape could not get there - decline rather than hand back levels whose
+            # shapes disagree with the metadata read from the same file
+            return None
+        datas.append(data)
+    return datas
 
 
 def save_tiff(filename, data, dimension_order=None, pixel_size=None, tile_size=(default_chunk_size, default_chunk_size),
