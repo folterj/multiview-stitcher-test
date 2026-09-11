@@ -1181,12 +1181,16 @@ class Interface:
 
     @catch_run_errors
     def run_global_registration(self, progress_factory=None):
-        with self._operation_progress('Global registration', progress_factory) as factory, \
+        # register_global() spends most of itself inside one blocking call that reports
+        # nothing, so it also reports its own stage boundaries (progress_factory) - without them
+        # the bar would sit at nothing until dask work near the end finally moved it
+        with self._operation_progress('Global registration', progress_factory, phases=3) as factory, \
                 NapariDaskProgress(progress_class=factory, desc='Global registration'), \
                 Timer('global registration', verbose=self._timing_verbose()):
             results = self.reg.register_global(self.reg.pair_msims,
                                                register_indices=self.reg.register_indices,
-                                               params=self.params['registration'])
+                                               params=self.params['registration'],
+                                               progress_factory=factory)
 
         self.reg.save_mappings(results['mappings'])
         self.reg.save_mappings_csv(results['mappings'])

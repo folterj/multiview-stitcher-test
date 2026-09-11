@@ -1,6 +1,22 @@
 import time
 
 
+def _paint_now():
+    """Give Qt one pass to paint what was just shown.
+
+    Everything here runs on the Qt thread, so a bar put up immediately before a long blocking
+    call would not actually appear until that call returned - which is the one time it is worth
+    having.
+    """
+    try:
+        from qtpy.QtWidgets import QApplication
+    except ImportError:  # pragma: no cover - Qt is always present in the napari plugin
+        return
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+
+
 class NapariPhaseProgress:
     """One napari progress bar, filling once, for a whole user-facing operation.
 
@@ -13,9 +29,13 @@ class NapariPhaseProgress:
     as progress.
 
     `phases` is how many phases the operation expects, which is what sizes the slices; an
-    operation that turns out to run more gets them out of what is left (halving each time), and
-    one that runs fewer has the remainder filled in when it ends. The bar itself is created by
-    the first phase that asks for one, so an operation with nothing to report shows no bar.
+    operation that turns out to run more gets them out of what is left, and one that runs fewer
+    has the remainder filled in when it ends.
+
+    The bar goes up when the operation starts, not when its first phase reports - an operation
+    whose first stretch of work reports nothing (global registration spends most of itself
+    inside one blocking call) would otherwise show nothing at all until it was nearly done -
+    and the Qt event loop is pumped once so it is actually painted before that work begins.
 
     The bar keeps the operation's own description throughout - a phase naming itself would turn
     one bar into a flicker of labels, and the phases are internal steps of the operation, not
@@ -54,6 +74,12 @@ class NapariPhaseProgress:
 
     def __enter__(self):
         self._started_at = time.monotonic()
+        kwargs = dict(self.progress_kwargs)
+        kwargs['total'] = self.ticks
+        if self.desc is not None:
+            kwargs['desc'] = self.desc
+        self._pbar = self.progress_class(**kwargs)
+        _paint_now()
         return self
 
     def __call__(self, total=None, desc=None, **_):
@@ -138,12 +164,6 @@ class NapariPhaseProgress:
             # of what is left rather than all of it
             span = remaining * self.last_phase_share
         self.phases_left = max(self.phases_left - 1, 0)
-        if self._pbar is None:
-            kwargs = dict(self.progress_kwargs)
-            kwargs['total'] = self.ticks
-            if self.desc is not None:
-                kwargs['desc'] = self.desc
-            self._pbar = self.progress_class(**kwargs)
         return _PhaseSlice(start=self._position, span=span, total=total)
 
     def _advance_phase(self, phase_slice, n=1):

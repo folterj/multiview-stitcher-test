@@ -1330,11 +1330,12 @@ def test_run_global_registration_persists_all_results(
     actual = bare_interface.run_global_registration()
 
     assert actual is results
-    bare_interface.reg.register_global.assert_called_once_with(
-        ["msim"],
-        register_indices=[0],
-        params={"method": "phase"},
-    )
+    _, global_kwargs = bare_interface.reg.register_global.call_args
+    assert global_kwargs["register_indices"] == [0]
+    assert global_kwargs["params"] == {"method": "phase"}
+    # register_global() reports its own stage boundaries: most of it is one blocking call, so
+    # without them the bar would not move until dask work near the end
+    assert global_kwargs["progress_factory"] is not None
     bare_interface.reg.save_mappings.assert_called_once_with(
         results["mappings"]
     )
@@ -1959,15 +1960,18 @@ def test_phase_progress_never_moves_backwards():
     assert _FakeNapariProgress.instances[0].value == NapariPhaseProgress.ticks
 
 
-def test_phase_progress_shows_no_bar_when_nothing_reports():
-    """An operation that turns out to have nothing to report must not flash an empty bar."""
+def test_phase_progress_shows_its_bar_before_any_phase_reports():
+    """The bar must go up when the operation starts, not when its first phase reports: global
+    registration spends most of itself inside one blocking call that reports nothing, and used
+    to show no bar at all until it was nearly done."""
     from muvis_align.ui.NapariPhaseProgress import NapariPhaseProgress
 
     _FakeNapariProgress.instances = []
-    with NapariPhaseProgress(progress_class=_FakeNapariProgress, desc='Loading project'):
-        pass
+    with NapariPhaseProgress(progress_class=_FakeNapariProgress, desc='Global registration'):
+        assert len(_FakeNapariProgress.instances) == 1
+        assert _FakeNapariProgress.instances[0].descriptions == ['Global registration']
 
-    assert _FakeNapariProgress.instances == []
+    assert _FakeNapariProgress.instances[0].closed
 
 
 def test_phase_progress_completes_a_phase_that_undercounts():
@@ -2139,8 +2143,9 @@ def test_phase_progress_reused_after_its_operation_opens_a_new_bar():
     with factory:
         with factory(total=2) as pbar:
             pbar.update(2)
-    with factory(total=2) as pbar:
-        pbar.update(2)
+    with factory:
+        with factory(total=2) as pbar:
+            pbar.update(2)
 
     assert len(_FakeNapariProgress.instances) == 2
     first, second = _FakeNapariProgress.instances

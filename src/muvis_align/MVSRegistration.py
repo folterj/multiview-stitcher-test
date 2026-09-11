@@ -77,6 +77,11 @@ class MVSRegistration:
     def msims(self, value):
         self._msims = value
 
+    @staticmethod
+    def progress_phase(progress_factory, total=None, desc=None):
+        """One reporting phase of the caller's operation, or nothing to report into."""
+        return progress_factory(total=total, desc=desc) if progress_factory is not None else nullcontext(None)
+
     def ensure_msims(self, progress_factory=None):
         # same lazy build the msims property triggers, but callable ahead of time with a
         # progress_factory - lets a caller that's about to force this (e.g. run_pre_processing())
@@ -1138,6 +1143,7 @@ class MVSRegistration:
         return results
 
     def register_pairs(self, register_msims=None, register_indices=None, params=None):
+        logging.info('Pair registration...')
         if register_indices is None:
             if self.register_indices is not None:
                 register_indices = self.register_indices
@@ -1192,7 +1198,7 @@ class MVSRegistration:
         reg_method, pairwise_reg_func, pairwise_reg_func_kwargs = self.create_registration_method(
             msi_utils.get_sim_from_msim(register_msims[0], scale='scale0'), params=params)
         logging.info(f'Registration method: {reg_method}')
-        logging.info('Registering...')
+        logging.info('Registering pairs...')
         # register_msims is a real multiscale, preprocessed pyramid per source (built by
         # preprocess()) - handing it to registration (instead of a single-level scale_factors=[]
         # wrap) lets compute_pairwise_registrations auto-select a good resolution per pair from
@@ -1286,7 +1292,8 @@ class MVSRegistration:
         }
 
     def register_global(self, pair_msims, register_indices=None, params=None,
-                        pairs_graph=None):
+                        pairs_graph=None, progress_factory=None):
+        logging.info('Global registration...')
         if register_indices is None:
             if self.register_indices is not None:
                 register_indices = self.register_indices
@@ -1329,7 +1336,8 @@ class MVSRegistration:
                 weight_key="quality",
             )
 
-        with dask.config.set(scheduler='threads'):
+        with self.progress_phase(progress_factory, total=1, desc='Global registration'), \
+                dask.config.set(scheduler='threads'):
             transforms_dict, groupwise_resolution_info_dict = groupwise_resolution(
                 g_reg_computed,
                 method=groupwise_resolution_method,
@@ -1415,9 +1423,11 @@ class MVSRegistration:
         mappings_dict = {index: mapping for index, mapping in zip(register_indices, mappings)}
 
         reg_channel = params.get('channel', 0)
-        metrics = calc_global_metrics(pair_msims, self.source_transform_key, self.reg_transform_key,
-                                      params.get('metrics', []), reg_channel=reg_channel, reg_results=reg_result,
-                                      n_parallel_pairs=n_parallel_pairwise_regs)
+        with self.progress_phase(progress_factory, total=1, desc='Global registration metrics'):
+            metrics = calc_global_metrics(pair_msims, self.source_transform_key, self.reg_transform_key,
+                                          params.get('metrics', []), reg_channel=reg_channel,
+                                          reg_results=reg_result,
+                                          n_parallel_pairs=n_parallel_pairwise_regs)
 
         self.metrics = metrics
         self.state = RegState.GLOBAL_REG
@@ -1446,6 +1456,7 @@ class MVSRegistration:
         level then has as many chunks (and dask graph tasks) in z as there are z-slices, even
         once a level's XY extent has been downsampled to a handful of pixels.
         """
+        logging.info('Fusion...')
         if output_filename is not None:
             output_filename = self.output + output_filename
 
