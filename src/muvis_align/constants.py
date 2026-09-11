@@ -96,6 +96,16 @@ fusion_stack_arrays = 3
 default_contrast_limits_max_tasks = 4096
 
 
+def _source_init_worker_ceiling(default=64):
+    value = os.environ.get('MUVIS_SOURCE_INIT_WORKERS')
+    if value:
+        try:
+            return max(int(value), 1)
+        except ValueError:
+            pass
+    return default
+
+
 # init_sources() constructs one ImageSource per file, each mostly waiting on a file
 # open/header read rather than doing real CPU work - a thread pool overlaps that I/O latency
 # (dominant on slow/network storage, e.g. a shared HPC filesystem) instead of paying it out
@@ -104,7 +114,11 @@ default_contrast_limits_max_tasks = 4096
 # the summed per-file time, i.e. near-perfectly I/O-bound, not GIL/CPU-bound) - but it still
 # scales with it up to a fixed ceiling, so a genuinely small/constrained machine (few cores,
 # likely also a modest network link) doesn't default to the same 64 threads a big one would.
-default_source_init_workers = min(64, _available_cpus * 8)
+# The ceiling itself is overridable (MUVIS_SOURCE_INIT_WORKERS): on a shared HPC filesystem
+# the per-source open is slower still - a 4733-source run measured 27s per source, 55% of it
+# not CPU - and the only way to overlap more of that wait is more threads than a local disk
+# would ever need.
+default_source_init_workers = min(_source_init_worker_ceiling(), _available_cpus * 8)
 # zarr v3 routes all of its own I/O through one shared, process-wide asyncio event loop plus a
 # single internal ThreadPoolExecutor (zarr.core.sync._get_executor()), sized by this config value
 # (default None -> Python's own min(32, cpu_count()+4)) - completely independent of
@@ -128,6 +142,11 @@ default_preview_workers = _available_cpus
 # on-screen preview stays proportionate to an exported one rather than fusing at native/scale0
 # resolution regardless of how large or how many sources there are
 default_interactive_preview_scale = 16
+# ...and how large the on-screen overview itself may be. Unlike a fused preview (a lazy dask
+# graph napari only ever computes the coarsest level of), the overview is pasted eagerly into one
+# array, so this is real memory - and a few hundred megapixels is already far more than a screen
+# can show.
+default_overview_max_bytes = 512 * 1024 ** 2
 # ...and an upper bound on what that preview may cost regardless of how it was reached. The
 # preview is a few hundred pixels on screen however large the fused stack behind it is, so
 # fusing more than this to draw it is wasted: a run whose pre-processing scale was 1 fused

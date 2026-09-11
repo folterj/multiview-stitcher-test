@@ -15,6 +15,7 @@ Each test is parameterized to run with different project configurations
 import logging
 import os
 import tempfile
+import time
 import importlib
 from contextlib import nullcontext
 from pathlib import Path
@@ -964,6 +965,7 @@ def test_update_views_adds_enabled_preview_layers(
     bare_interface._create_napari_data.assert_called_once_with(
         "registered",
         show_preprocessed=True,
+        composite=True,
     )
     bare_interface._napari_view_add_fused_data.assert_called_once_with(
         bare_interface.viewer, image_data, "sample data", cheap=True
@@ -1869,10 +1871,9 @@ def test_reg_init_progress_builds_msims_with_progress(monkeypatch, tmp_path):
     reg.ensure_msims = MagicMock(return_value=['msim-0'])
     reg.msims = ['msim-0']
     monkeypatch.setattr(mvs_module, 'make_msims_2d', lambda msims: msims)
-    monkeypatch.setattr(
-        mvs_module.mv_graph, 'build_view_adjacency_graph_from_msims',
-        lambda *_, **__: nx.Graph()
-    )
+    # the pairs graph is built directly now (no linear program per pair) - stand in for it, as
+    # this test is about the msim build being reported, not about graph building
+    monkeypatch.setattr(mvs_module, 'build_pairs_graph', lambda *_, **__: nx.Graph())
     factory = _RecordingProgressFactory()
 
     reg.init_progress('registered', 'zarr', progress_factory=factory)
@@ -2151,3 +2152,113 @@ def test_phase_progress_reused_after_its_operation_opens_a_new_bar():
     first, second = _FakeNapariProgress.instances
     assert first.closed
     assert second.value > 0
+
+
+def test_run_off_thread_runs_the_work_elsewhere_and_keeps_qt_free(make_napari_viewer):
+    """The heavy calls must not run on the Qt thread: that is what froze the window for as long
+    as a registration or fusion took. _run_off_thread() runs them on a worker while a nested
+    event loop keeps Qt going, and hands back what they returned."""
+    import threading
+
+    viewer = make_napari_viewer()
+    interface = CanonicalInterface.__new__(CanonicalInterface)
+    interface.viewer = viewer
+    interface.enable_plugin_widget = None
+
+    ticks = []
+    timer = interface_module.QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(lambda: ticks.append(1))
+
+    qt_thread = threading.current_thread().ident
+    work_thread = {}
+
+    def work(worker_factory):
+        work_thread['ident'] = threading.current_thread().ident
+        with worker_factory(total=4) as pbar:
+            for _ in range(4):
+                pbar.update(1)
+                time.sleep(0.02)
+        return 'result'
+
+    with interface._operation_progress('Work') as factory:
+        timer.start()
+        result = interface._run_off_thread(work, factory)
+        timer.stop()
+
+    assert result == 'result'
+    assert work_thread['ident'] != qt_thread
+    # the event loop kept running while the work did - a frozen window ticks not at all
+    assert ticks
+
+
+def test_run_off_thread_propagates_failures_to_the_caller(make_napari_viewer):
+    """A failure on the worker must surface where the call was made (and so reach
+    @catch_run_errors), not be re-raised inside the Qt event loop where nothing catches it."""
+    viewer = make_napari_viewer()
+    interface = CanonicalInterface.__new__(CanonicalInterface)
+    interface.viewer = viewer
+    interface.enable_plugin_widget = None
+
+    def work(_):
+        raise ValueError('boom')
+
+    with interface._operation_progress('Work') as factory:
+        with pytest.raises(ValueError, match='boom'):
+            interface._run_off_thread(work, factory)
+
+
+def test_run_off_thread_runs_inline_without_a_qt_application(bare_interface, monkeypatch):
+    """Headless (tests, any non-GUI caller): there is no event loop to keep alive, so the work
+    simply runs here rather than going near a worker."""
+    monkeypatch.setattr(interface_module.QApplication, 'instance', staticmethod(lambda: None))
+
+    assert bare_interface._run_off_thread(lambda factory: (factory, 'ran'), 'the-factory') == (
+        'the-factory', 'ran')
+
+
+def test_phase_progress_does_not_recurse_when_the_bar_reports_back():
+    """Updating a napari bar repaints it, and repainting pumps the Qt event loop - which can
+    deliver the next position a worker reported straight back into the bar, mid-update. Left to
+    recurse that runs the stack out, which is what crashed a 328-source project load."""
+    from muvis_align.ui.NapariPhaseProgress import NapariPhaseProgress
+
+    updates = []
+
+    class _ReportsBackWhileUpdating(_FakeNapariProgress):
+        def update(self, n=1):
+            super().update(n)
+            updates.append(self.value)
+            if self.value < NapariPhaseProgress.ticks:
+                # as a queued position from the worker would arrive, inside processEvents()
+                factory.set_position(self.value + 50)
+
+    _FakeNapariProgress.instances = []
+    factory = NapariPhaseProgress(progress_class=_ReportsBackWhileUpdating, phases=1)
+    with factory:
+        factory.set_position(50)
+
+    bar = _FakeNapariProgress.instances[0]
+    assert bar.value == NapariPhaseProgress.ticks
+    # each position was applied by the loop, not by re-entering it
+    assert len(updates) <= NapariPhaseProgress.ticks // 50 + 1
+
+
+def test_update_views_draws_the_pasted_overview_not_a_fusion(bare_interface, monkeypatch):
+    """The main view's image is the pasted overview (composite=True): fusing for it costs per
+    source however small the preview is made - 10.3 minutes for a 4733-source project."""
+    bare_interface.viewer = MagicMock()
+    bare_interface.overview = MagicMock()
+    bare_interface.reg.sources = [SimpleNamespace(get_size=lambda: {"y": 10, "x": 10})]
+    bare_interface.reg.positions = [{"z": 0}]
+    bare_interface.reg.fileset_label = "sample"
+    bare_interface._create_napari_shapes = MagicMock(return_value=([], [], [], []))
+    bare_interface._create_napari_data = MagicMock(return_value="overview")
+    bare_interface._clear_napari_view = MagicMock()
+    bare_interface._update_view_add_shapes = MagicMock()
+    bare_interface._napari_view_add_fused_data = MagicMock()
+
+    bare_interface.update_views(transform_key="registered")
+
+    _, kwargs = bare_interface._create_napari_data.call_args
+    assert kwargs['composite'] is True

@@ -753,12 +753,16 @@ class MVSRegistration:
                 }
                 if pbar is not None:
                     pbar.update(1)
-                with dask.config.set(scheduler='single-threaded'):
-                    self.pairs_graph = mv_graph.build_view_adjacency_graph_from_msims(
-                        self.pair_msims,
-                        transform_key=self.source_transform_key,
-                        pairs=self.pairs
-                    )
+                # the pairs are known (they came from the saved mapping), so the graph is built
+                # directly rather than having multiview_stitcher rediscover each edge's overlap
+                # with a linear program per pair - 4.1ms each, and every edge attribute below is
+                # written straight over the result anyway. The saved bboxes give the overlap
+                # weight the graph build would have measured, for nothing.
+                overlaps = {key: float(np.prod([abs(high - low) for low, high
+                                                in zip(*np.array(value).reshape(2, -1))]))
+                            for key, value in indexed_bboxes.items()}
+                self.pairs_graph = build_pairs_graph(self.pair_msims, self.pairs,
+                                                     self.source_transform_key, overlaps=overlaps)
                 if pbar is not None:
                     pbar.update(1)
             nx.set_edge_attributes(self.pairs_graph, indexed_pair_transforms, default_transform_key)

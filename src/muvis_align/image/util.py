@@ -7,6 +7,7 @@ import cv2 as cv
 import dask
 import dask.array as da
 import numpy as np
+import networkx as nx
 from multiview_stitcher import msi_utils, param_utils, fusion, mv_graph
 from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher.registration import _get_overlap_bboxes, sims_to_intrinsic_coord_system, \
@@ -28,7 +29,8 @@ except Exception as e:
     print(f'matplotlib import error:\n{e}')
 
 from muvis_align.constants import (default_chunk_size, default_contrast_limits_max_tasks,
-                                   default_fusion_chunk_bytes, default_preview_max_bytes,
+                                   default_fusion_chunk_bytes, default_overview_max_bytes,
+                                   default_preview_max_bytes,
                                    fusion_stack_arrays)
 from muvis_align.util import *
 
@@ -769,12 +771,24 @@ def get_level_from_scale(source, target_scale=1):
         target_pixel_size = {dim: float(source_pixel_size * target_scale)
                              for dim, source_pixel_size in source.get_pixel_size().items()}
         target_scale = {dim: target_scale for dim in source.get_pixel_size()}
+    # Judged only on the dims this source's pyramid actually reduces. A dim that is the same
+    # size at every level - the size-1 'z' every OME-Zarr tile carries, or a z-stack whose levels
+    # only downsample x/y - keeps a factor of 1 throughout, so testing it let *any* level pass
+    # however coarse: a 16x level satisfied `any(factor <= target)` through its z alone, and a
+    # request for 6x loaded 16x data. Exact-factor requests (8x against 1,2,4,8,16) matched the
+    # right level and hid it; anything in between silently went coarser than asked.
+    reducing_dims = [dim for dim in source.scale_factors[0]
+                     if any(factors.get(dim, 1) > 1 for factors in source.scale_factors)] \
+        if source.scale_factors else []
+
     best_level, best_scale = 0, target_scale
     for level, factors in enumerate(source.scale_factors):
-        if any(np.isclose(factors[dim], target_scale[dim], rtol=1e-4) for dim in factors):
+        dims = reducing_dims or list(factors)
+        if all(np.isclose(factors[dim], target_scale[dim], rtol=1e-4) for dim in dims):
             best_level, best_scale = level, {dim: target_scale[dim] / factors[dim] for dim in factors}
             break
-        if any(factors[dim] <= target_scale[dim] for dim in factors):
+        # the coarsest level that is still at least as fine as asked for - never coarser
+        if all(factors[dim] <= target_scale[dim] for dim in dims):
             best_level, best_scale = level, {dim: target_scale[dim] / factors[dim] for dim in factors}
     if best_level == 0:
         for dim in best_scale:
@@ -2166,10 +2180,25 @@ def make_msims_3d(msims, z_scale=None, positions=None):
     return new_msims
 
 
+def msim_is_2d(msim):
+    """Whether this msim is already 2D - no z dim, and a 2D (3x3) affine on every transform.
+    make_msims_2d() rebuilds a msim's whole DataTree, which for a few thousand sources is
+    minutes of pure xarray object construction, so it is worth not rebuilding what is already
+    in the shape asked for."""
+    sim = msi_utils.get_sim_from_msim(msim, scale='scale0')
+    if 'z' in sim.dims:
+        return False
+    return all(3 in si_utils.get_affine_from_sim(sim, transform_key=transform_key).shape
+               for transform_key in si_utils.get_tranform_keys_from_sim(sim))
+
+
 def make_msims_2d(msims):
     # msim-native equivalent of make_sims_2d
     new_msims = []
     for msim in msims:
+        if msim_is_2d(msim):
+            new_msims.append(msim)
+            continue
         def level_func(sim, scale_key):
             if 'z' in sim.dims:
                 sim = sim.squeeze('z')
@@ -2292,6 +2321,140 @@ def estimate_fused_size(msims, transform_key, output_spacing_method=None, z_scal
                                         z_scale=z_scale)
     itemsize = get_msim_image0(msims[0]).dtype.itemsize
     return int(np.prod([int(size) for size in properties['shape'].values()]) * itemsize), properties
+
+
+def composite_msims_overview(msims, transform_key, z_scale=None,
+                             max_bytes=default_overview_max_bytes, label='Overview'):
+    """Every source pasted into one array at its registered position - the on-screen overview.
+
+    What napari's main view needs is a picture of where the sources sit, and fusing for that is
+    the wrong tool: multiview_stitcher's cost is per *view*, not per pixel (it inspects every
+    view's transform with per-element xarray label lookups, then plans one graph per output
+    level), so it scales with the dataset however small the preview is made. Measured on a
+    4733-source project: 10.3 minutes to plan the preview fusion, against 33 seconds of shape
+    building and 17 seconds to draw. Shrinking the fused result 256x saved only half of it.
+
+    Pasting costs one strided copy per source instead, which is O(sources) with a tiny constant -
+    1.9s against 18.6s for 328 sources, including reading every source's pixels (the fusion
+    figure does not: it stays lazy). Overlaps are simply overwritten, nearest-neighbour: this is
+    an overview, not the fused result, and the fusion tab's preview and the export are unchanged.
+
+    The output geometry is the one fuse() would have produced (calc_output_properties), so the
+    layer lands exactly where the fused one did, coarsened in x/y if that would be larger than
+    max_bytes. Returns None - leaving the caller to fuse - for anything this cannot place
+    faithfully: a source whose transform is not a pure translation (a rotation needs resampling,
+    not a paste), or sources that disagree about their non-spatial dims.
+    """
+    sims = [msi_utils.get_sim_from_msim(msim, scale='scale0') if isinstance(msim, DataTree) else msim
+            for msim in msims]
+    if not sims:
+        return None
+    sdims = si_utils.get_spatial_dims_from_sim(sims[0])
+    nsdims = [dim for dim in sims[0].dims if dim not in sdims]
+    if any(si_utils.get_spatial_dims_from_sim(sim) != sdims for sim in sims):
+        return None
+
+    translations = []
+    for sim in sims:
+        affine = si_utils.get_affine_from_sim(sim, transform_key)
+        if 't' in affine.dims:
+            affine = affine.sel(t=0)
+        matrix = np.asarray(affine, dtype=float)
+        ndim = len(sdims)
+        if not np.allclose(matrix[:ndim, :ndim], np.eye(ndim), atol=1e-6):
+            logging.info(f'{label}: source transforms are not translations only - fusing instead')
+            return None
+        translations.append(matrix[:ndim, ndim])
+
+    properties = calc_output_properties(sims, transform_key, output_spacing_method='mean',
+                                        z_scale=z_scale)
+    spacing = dict(properties['spacing'])
+    origin = dict(properties['origin'])
+    shape = {dim: int(properties['shape'][dim]) for dim in sdims}
+
+    # in-plane coarsening only: z is what tells the sections apart, and there are few of them
+    plane_dims = [dim for dim in sdims if dim != 'z']
+    itemsize = np.dtype(sims[0].dtype).itemsize
+    planes = int(np.prod([sim_size for dim, sim_size in shape.items() if dim not in plane_dims])) or 1
+    for _ in range(16):
+        if np.prod([shape[dim] for dim in sdims]) * itemsize <= max_bytes or not plane_dims:
+            break
+        for dim in plane_dims:
+            shape[dim] = max(shape[dim] // 2, 1)
+            spacing[dim] *= 2
+    del planes
+
+    leading = [sims[0].sizes[dim] for dim in nsdims]
+    overview = np.zeros(leading + [shape[dim] for dim in sdims], dtype=sims[0].dtype)
+
+    for sim, translation in zip(sims, translations):
+        sim_spacing = si_utils.get_spacing_from_sim(sim)
+        sim_origin = si_utils.get_origin_from_sim(sim)
+        # one output pixel per `stride` source pixels, and where in the output this source starts
+        strides, starts = [], []
+        for index, dim in enumerate(sdims):
+            strides.append(max(int(round(spacing[dim] / sim_spacing[dim])), 1))
+            starts.append(int(round((sim_origin[dim] + translation[index] - origin[dim])
+                                    / spacing[dim])))
+        data = np.asarray(sim.data)
+        if data.ndim != len(nsdims) + len(sdims):
+            return None
+        data = data[tuple([slice(None)] * len(nsdims)
+                          + [slice(None, None, stride) for stride in strides])]
+        target, source = [slice(None)] * len(nsdims), [slice(None)] * len(nsdims)
+        for index, dim in enumerate(sdims):
+            start = starts[index]
+            stop = min(start + data.shape[len(nsdims) + index], shape[dim])
+            source.append(slice(max(-start, 0), max(stop - start, 0)))
+            target.append(slice(max(start, 0), max(stop, 0)))
+        if any(piece.stop <= piece.start for piece in target[len(nsdims):]):
+            continue    # entirely outside the output
+        overview[tuple(target)] = data[tuple(source)]
+
+    sim = si_utils.get_sim_from_array(
+        overview,
+        dims=list(nsdims) + list(sdims),
+        scale={dim: spacing[dim] for dim in sdims},
+        translation={dim: origin[dim] for dim in sdims},
+        transform_key=transform_key,
+        c_coords=sims[0].coords['c'].values if 'c' in nsdims else None,
+    )
+    logging.info(f'{label}: {len(sims)} sources pasted into'
+                 f' {"x".join(str(shape[dim]) for dim in sdims)}')
+    return wrap_sims_as_msims([sim])[0]
+
+
+def build_pairs_graph(msims, pairs, transform_key, overlaps=None):
+    """The view adjacency graph for a set of pairs that is already known.
+
+    multiview_stitcher's build_view_adjacency_graph_from_msims() derives the pairs itself, and
+    even when handed them it still solves a linear program per pair to measure the overlap
+    (4.1ms each locally; 12823 pairs on a resumed 4733-source project). Resuming a saved pair
+    registration needs none of that: the pairs come from the saved mapping, and every edge
+    attribute that matters - the transform, its quality, its bounding box - is written straight
+    over the top of whatever the graph build put there.
+
+    So the graph is built directly: the same nodes carrying the same 'stack_props' (cheap
+    metadata, no pixel data), the same edges, and an 'overlap' weight taken from `overlaps` when
+    the caller has one (the saved bbox gives it for free). Downstream reads that weight as
+    .get('overlap', 1.0) - global_optimization, the default resolution method, ignores it
+    entirely - so an edge without one behaves as it always did.
+    """
+    graph = nx.Graph()
+    graph.add_nodes_from(range(len(msims)))
+    sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+    nsdims = si_utils.get_nonspatial_dims_from_sim(sims[0])
+    if len(nsdims):
+        # as mv_graph does: stack properties describe one plane, not the t/c stack
+        sims = [si_utils.sim_sel_coords(sim, {nsdim: sim.coords[nsdim][0] for nsdim in nsdims})
+                for sim in sims]
+    stack_props = [si_utils.get_stack_properties_from_sim(sim, transform_key=transform_key)
+                   for sim in sims]
+    nx.set_node_attributes(graph, dict(enumerate(stack_props)), name='stack_props')
+    for pair in pairs:
+        overlap = (overlaps or {}).get(tuple(pair))
+        graph.add_edge(*pair, **({'overlap': overlap} if overlap is not None else {}))
+    return graph
 
 
 def reduce_msims_to_fused_size(msims, transform_key, max_bytes=default_preview_max_bytes,
